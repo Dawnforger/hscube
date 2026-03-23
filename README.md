@@ -45,5 +45,7 @@ Generated APK path:
 Notes:
 
 - This is a rough prototype package for testing UI/timer flows.
+- Building the APK requires Android SDK + Java to be installed locally.
+- If your SDK is not auto-detected, set `ANDROID_HOME` / `ANDROID_SDK_ROOT`.
 - Bluetooth behavior inside Android WebView can differ from desktop Chrome Web Bluetooth support.
 - For robust native BLE behavior on Android devices, a follow-up native BLE bridge/plugin path is recommended.
