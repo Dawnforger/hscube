@@ -1,4 +1,5 @@
 import { connectSmartPuzzle } from "cubing/bluetooth";
+import { installNativeBluetoothShimIfNeeded } from "./nativeBluetooth";
 
 const STORAGE_KEY = "gan-smartcube-lite-solves-v1";
 const SOLVED_CHECK_OPTIONS = {
@@ -28,17 +29,9 @@ let elapsedMs = 0;
 let frameId = null;
 let wasCubeSolved = true;
 let sawUnsolvedDuringRun = false;
+let nativeBluetoothActive = false;
 
 const solves = loadSolves();
-
-renderTimer();
-renderSolves();
-setBluetoothStatus("Not connected.");
-
-if (!("bluetooth" in navigator)) {
-  setBluetoothStatus("Web Bluetooth is not available in this browser.");
-  elements.connectBtn.disabled = true;
-}
 
 elements.connectBtn.addEventListener("click", onConnectClick);
 elements.disconnectBtn.addEventListener("click", disconnectCube);
@@ -70,16 +63,50 @@ document.addEventListener("keydown", (event) => {
   toggleManualTimer();
 });
 
+void bootstrap();
+
+async function bootstrap() {
+  renderTimer();
+  renderSolves();
+  setBluetoothStatus("Not connected.");
+  elements.connectBtn.disabled = true;
+
+  try {
+    nativeBluetoothActive = await installNativeBluetoothShimIfNeeded();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setBluetoothStatus(`Bluetooth initialization failed: ${message}`);
+    return;
+  }
+
+  if (!("bluetooth" in navigator)) {
+    setBluetoothStatus("Bluetooth is not available in this environment.");
+    return;
+  }
+
+  if (nativeBluetoothActive) {
+    setBluetoothStatus("Native BLE ready. Tap Connect Cube.");
+  }
+
+  elements.connectBtn.disabled = false;
+}
+
 async function onConnectClick() {
   if (!("bluetooth" in navigator)) {
     return;
   }
 
   elements.connectBtn.disabled = true;
-  setBluetoothStatus("Opening Bluetooth device picker...");
+  setBluetoothStatus(
+    nativeBluetoothActive
+      ? "Opening native Bluetooth picker..."
+      : "Opening Bluetooth device picker...",
+  );
 
   try {
-    const connectedPuzzle = await connectSmartPuzzle();
+    const connectedPuzzle = await connectSmartPuzzle(
+      nativeBluetoothActive ? { acceptAllDevices: true } : undefined,
+    );
     puzzle = connectedPuzzle;
     listeningPuzzle = connectedPuzzle;
 
