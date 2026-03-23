@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GAN Smartcube Lite</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="app-header">
+        <h1>GAN Smartcube Lite</h1>
+        <p class="subtitle">Timer + GAN i3 Bluetooth + solve history</p>
+      </header>
+
+      <section class="card connection-card">
+        <h2>Bluetooth</h2>
+        <div class="connection-controls">
+          <button id="connect-btn">Connect Cube</button>
+          <button id="disconnect-btn" disabled>Disconnect</button>
+        </div>
+        <p id="connection-status">Not connected.</p>
+      </section>
+
+      <section class="card timer-card">
+        <h2>Timer</h2>
+        <p id="timer-display" class="timer-display">0.00</p>
+        <div class="timer-controls">
+          <button id="manual-toggle-btn">Start / Stop (Space)</button>
+          <button id="reset-btn">Reset</button>
+        </div>
+        <label class="checkbox-row">
+          <input id="auto-timer-checkbox" type="checkbox" checked />
+          Auto-start/stop from cube state
+        </label>
+      </section>
+
+      <section class="card stats-card">
+        <h2>Stats</h2>
+        <p>Total solves: <strong id="total-solves">0</strong></p>
+        <p>Ao5 (last 5): <strong id="ao5-value">N/A</strong></p>
+      </section>
+
+      <section class="card history-card">
+        <div class="history-header">
+          <h2>Solve History</h2>
+          <button id="clear-solves-btn">Clear</button>
+        </div>
+        <ol id="solve-list"></ol>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
