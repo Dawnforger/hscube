@@ -85,7 +85,7 @@ async function bootstrap() {
   }
 
   if (nativeBluetoothActive) {
-    setBluetoothStatus("Native BLE ready. Tap Connect Cube.");
+    setBluetoothStatus("Native BLE ready (GAN-compatible filter). Tap Connect Cube.");
   }
 
   elements.connectBtn.disabled = false;
@@ -104,9 +104,7 @@ async function onConnectClick() {
   );
 
   try {
-    const connectedPuzzle = await connectSmartPuzzle(
-      nativeBluetoothActive ? { acceptAllDevices: true } : undefined,
-    );
+    const connectedPuzzle = await connectSmartPuzzle();
     puzzle = connectedPuzzle;
     listeningPuzzle = connectedPuzzle;
 
@@ -124,7 +122,14 @@ async function onConnectClick() {
     sawUnsolvedDuringRun = false;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    setBluetoothStatus(`Connection failed: ${message}`);
+    const normalized = message.toLowerCase();
+    if (normalized.includes("characteristic not found")) {
+      setBluetoothStatus(
+        "Connection failed: selected device is not a compatible GAN smart cube.",
+      );
+    } else {
+      setBluetoothStatus(`Connection failed: ${message}`);
+    }
   } finally {
     elements.connectBtn.disabled = false;
   }

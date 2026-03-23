@@ -2,6 +2,8 @@ import { Capacitor } from "@capacitor/core";
 import { BleClient } from "@capacitor-community/bluetooth-le";
 
 let bleInitialized = false;
+const GAN_CUBE_SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb";
+const GAN_INFO_SERVICE_UUID = "0000180a-0000-1000-8000-00805f9b34fb";
 
 export async function installNativeBluetoothShimIfNeeded() {
   if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== "android") {
@@ -48,17 +50,27 @@ async function requestDevice(options = {}) {
 }
 
 function toBleRequestOptions(options) {
+  // This app targets GAN cubes. Keeping a strict filter prevents the picker
+  // from being cluttered with unrelated BLE peripherals and reduces bad picks.
+  const defaults = {
+    namePrefix: "GAN",
+    services: [GAN_CUBE_SERVICE_UUID],
+    optionalServices: [GAN_INFO_SERVICE_UUID],
+  };
+
   if (!options || options.acceptAllDevices) {
-    return {};
+    return defaults;
   }
 
   const filters = Array.isArray(options.filters) ? options.filters : [];
-  if (filters.length !== 1) {
-    return {};
+  const selectedFilter = pickPreferredFilter(filters);
+
+  if (!selectedFilter) {
+    return defaults;
   }
 
-  const [filter] = filters;
   const bleOptions = {};
+  const filter = selectedFilter;
 
   if (typeof filter.name === "string" && filter.name.length > 0) {
     bleOptions.name = filter.name;
@@ -68,19 +80,49 @@ function toBleRequestOptions(options) {
     bleOptions.namePrefix = filter.namePrefix;
   }
 
-  if (Array.isArray(filter.services) && filter.services.length > 0) {
-    bleOptions.services = filter.services.map((service) => normalizeUuid(service));
-  }
+  const selectedServices =
+    Array.isArray(filter.services) && filter.services.length > 0
+      ? filter.services.map((service) => normalizeUuid(service))
+      : [];
+  bleOptions.services =
+    selectedServices.length > 0 ? selectedServices : [...defaults.services];
 
   const optionalServices = Array.isArray(options.optionalServices)
     ? options.optionalServices.map((service) => normalizeUuid(service))
     : [];
 
-  if (optionalServices.length > 0) {
-    bleOptions.optionalServices = optionalServices;
-  }
+  bleOptions.optionalServices = unique([
+    ...defaults.optionalServices,
+    ...optionalServices,
+  ]);
 
   return bleOptions;
+}
+
+function pickPreferredFilter(filters) {
+  if (!filters.length) {
+    return null;
+  }
+
+  const ganByPrefix = filters.find(
+    (filter) =>
+      typeof filter?.namePrefix === "string" &&
+      filter.namePrefix.toUpperCase().startsWith("GAN"),
+  );
+  if (ganByPrefix) {
+    return ganByPrefix;
+  }
+
+  const ganByName = filters.find(
+    (filter) =>
+      typeof filter?.name === "string" &&
+      filter.name.toUpperCase().startsWith("GAN"),
+  );
+  if (ganByName) {
+    return ganByName;
+  }
+
+  return filters[0];
 }
 
 class NativeBluetoothDevice {
@@ -239,4 +281,8 @@ function toDataView(value) {
   }
 
   throw new Error("Unsupported value type for BLE write.");
+}
+
+function unique(items) {
+  return [...new Set(items)];
 }

@@ -48,4 +48,5 @@ Notes:
 - Building the APK requires Android SDK + Java to be installed locally.
 - If your SDK is not auto-detected, set `ANDROID_HOME` / `ANDROID_SDK_ROOT`.
 - Android builds use a native BLE transport (Capacitor BLE plugin), not Web Bluetooth.
+- Android native BLE picker is intentionally filtered to GAN-compatible devices.
 - Desktop browser builds continue to use Web Bluetooth.
