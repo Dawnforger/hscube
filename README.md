@@ -1,11 +1,13 @@
 # GAN Smartcube Lite
 
-Current app version: **1.2.0**
+Current app version: **1.3.0**
 
 Minimal open source replacement app for CubeStation focused on:
 
 - Bluetooth connection to GAN smart cubes (including GAN i3) via Web Bluetooth
 - Solve workflow with configurable scramble mode (free or algorithm) and inspection timer
+- Split-screen navigation with drawer menu (Solve and Records)
+- 3D rendered cube view on Solve screen with sync status + reset option
 - Solve history persistence in local storage
 - Ao5 for the latest five solves (WCA-style trimmed mean)
 

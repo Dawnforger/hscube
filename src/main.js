@@ -1,4 +1,5 @@
 import { connectGanCube } from "gan-web-bluetooth";
+import { createCubeRenderer } from "./cubeRenderer";
 import { installNativeBluetoothShimIfNeeded } from "./nativeBluetooth";
 
 const STORAGE_KEY = "gan-smartcube-lite-solves-v1";
@@ -20,9 +21,19 @@ const SCRAMBLE_MODE = {
 };
 
 const elements = {
+  menuToggleBtn: document.querySelector("#menu-toggle-btn"),
+  sideDrawer: document.querySelector("#side-drawer"),
+  drawerBackdrop: document.querySelector("#drawer-backdrop"),
+  navSolveBtn: document.querySelector("#nav-solve-btn"),
+  navRecordsBtn: document.querySelector("#nav-records-btn"),
+  solveScreen: document.querySelector("#solve-screen"),
+  recordsScreen: document.querySelector("#records-screen"),
   connectBtn: document.querySelector("#connect-btn"),
   disconnectBtn: document.querySelector("#disconnect-btn"),
   connectionStatus: document.querySelector("#connection-status"),
+  cubeViewport: document.querySelector("#cube-viewport"),
+  cubeSyncStatus: document.querySelector("#cube-sync-status"),
+  resetCubeSyncBtn: document.querySelector("#reset-cube-sync-btn"),
   timerDisplay: document.querySelector("#timer-display"),
   inspectionDisplay: document.querySelector("#inspection-display"),
   manualToggleBtn: document.querySelector("#manual-toggle-btn"),
@@ -55,6 +66,9 @@ let sawUnsolvedDuringRun = false;
 let nativeBluetoothActive = false;
 let latestApkDownloadUrl = null;
 let currentCubeSolved = true;
+let currentFacelets = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
+let cubeRenderer = null;
+let activeScreen = "solve";
 
 let workflowPhase = WORKFLOW_PHASE.IDLE;
 let scrambleMode = SCRAMBLE_MODE.ALG;
@@ -70,6 +84,13 @@ const solves = loadSolves();
 elements.connectBtn.addEventListener("click", onConnectClick);
 elements.disconnectBtn.addEventListener("click", () => {
   void disconnectCube();
+});
+elements.menuToggleBtn.addEventListener("click", toggleDrawer);
+elements.drawerBackdrop.addEventListener("click", closeDrawer);
+elements.navSolveBtn.addEventListener("click", () => switchScreen("solve"));
+elements.navRecordsBtn.addEventListener("click", () => switchScreen("records"));
+elements.resetCubeSyncBtn.addEventListener("click", () => {
+  void resetCubeData();
 });
 elements.manualToggleBtn.addEventListener("click", () => toggleManualTimer());
 elements.resetBtn.addEventListener("click", resetTimer);
@@ -106,6 +127,10 @@ document.addEventListener("keydown", (event) => {
 void bootstrap();
 
 async function bootstrap() {
+  switchScreen("solve");
+  cubeRenderer = createCubeRenderer(elements.cubeViewport);
+  cubeRenderer.updateFromFacelets(currentFacelets);
+  setCubeSyncStatus("Waiting for cube state...");
   renderTimer();
   renderInspection();
   renderSolves();
@@ -135,6 +160,10 @@ async function bootstrap() {
 
   elements.connectBtn.disabled = false;
 }
+
+window.addEventListener("beforeunload", () => {
+  cubeRenderer?.destroy();
+});
 
 async function onConnectClick() {
   if (!("bluetooth" in navigator)) {
@@ -213,6 +242,7 @@ async function disconnectCube(options = {}) {
   if (!preserveStatus) {
     setBluetoothStatus("Disconnected.");
   }
+  setCubeSyncStatus("Cube disconnected.");
   renderWorkflow();
 }
 
@@ -237,6 +267,9 @@ async function onGanCubeEvent(event) {
   }
 
   currentCubeSolved = isFaceletsSolved(event.facelets);
+  currentFacelets = event.facelets;
+  cubeRenderer?.updateFromFacelets(currentFacelets);
+  setCubeSyncStatus(currentCubeSolved ? "Cube is solved." : "Cube state in sync.");
 
   if (workflowPhase === WORKFLOW_PHASE.SOLVING && timerRunning) {
     if (!currentCubeSolved) {
@@ -529,6 +562,37 @@ function renderWorkflow() {
   }
 }
 
+function switchScreen(screen) {
+  activeScreen = screen === "records" ? "records" : "solve";
+
+  const solveActive = activeScreen === "solve";
+  elements.solveScreen.classList.toggle("active", solveActive);
+  elements.recordsScreen.classList.toggle("active", !solveActive);
+  elements.navSolveBtn.classList.toggle("active", solveActive);
+  elements.navRecordsBtn.classList.toggle("active", !solveActive);
+  closeDrawer();
+}
+
+function toggleDrawer() {
+  const isOpen = elements.sideDrawer.classList.contains("open");
+  if (isOpen) {
+    closeDrawer();
+    return;
+  }
+
+  elements.sideDrawer.classList.add("open");
+  elements.drawerBackdrop.classList.remove("hidden");
+}
+
+function closeDrawer() {
+  elements.sideDrawer.classList.remove("open");
+  elements.drawerBackdrop.classList.add("hidden");
+}
+
+window.addEventListener("beforeunload", () => {
+  cubeRenderer?.destroy();
+});
+
 function renderTimer() {
   elements.timerDisplay.textContent = formatTime(elapsedMs);
 }
@@ -670,6 +734,30 @@ function openLatestApk() {
   }
 
   window.open(latestApkDownloadUrl, "_blank", "noopener,noreferrer");
+}
+
+async function resetCubeData() {
+  if (!cubeConnection) {
+    setCubeSyncStatus("Connect cube to reset its internal data.");
+    return;
+  }
+
+  try {
+    await cubeConnection.sendCubeCommand({ type: "REQUEST_RESET" });
+    await cubeConnection.sendCubeCommand({ type: "REQUEST_FACELETS" });
+    scrambleStep = 0;
+    scrambleOffTrackMove = null;
+    if (scrambleMode === SCRAMBLE_MODE.ALG && scrambleMoves.length > 0) {
+      updateScrambleProgressText();
+      setWorkflowStatus("Cube reset done. Re-apply scramble from start.");
+    } else {
+      setWorkflowStatus("Cube reset done.");
+    }
+    setCubeSyncStatus("Cube state reset requested.");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setCubeSyncStatus(`Cube reset failed: ${message}`);
+  }
 }
 
 function renderSolves() {
@@ -905,4 +993,8 @@ function setBluetoothStatus(message) {
 
 function setWorkflowStatus(message) {
   elements.workflowStatus.textContent = message;
+}
+
+function setCubeSyncStatus(message) {
+  elements.cubeSyncStatus.textContent = message;
 }
