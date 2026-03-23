@@ -44,7 +44,27 @@ async function requestDevice(options = {}) {
   await ensureBleInitialized();
 
   const requestOptions = toBleRequestOptions(options);
-  const bleDevice = await BleClient.requestDevice(requestOptions);
+  let bleDevice;
+  try {
+    bleDevice = await BleClient.requestDevice(requestOptions);
+  } catch (error) {
+    const message = String(error ?? "").toLowerCase();
+    const shouldRetry =
+      message.includes("no device found") ||
+      message.includes("notfounderror") ||
+      message.includes("scan");
+
+    if (!shouldRetry) {
+      throw error;
+    }
+
+    // Some GAN devices do not advertise every service during scan.
+    // Fall back to prefix-only filtering before giving up.
+    bleDevice = await BleClient.requestDevice({
+      namePrefix: "GAN",
+      optionalServices: [GAN_CUBE_SERVICE_UUID, GAN_INFO_SERVICE_UUID],
+    });
+  }
 
   return new NativeBluetoothDevice(bleDevice.deviceId, bleDevice.name ?? "Unknown cube");
 }
@@ -54,8 +74,7 @@ function toBleRequestOptions(options) {
   // from being cluttered with unrelated BLE peripherals and reduces bad picks.
   const defaults = {
     namePrefix: "GAN",
-    services: [GAN_CUBE_SERVICE_UUID],
-    optionalServices: [GAN_INFO_SERVICE_UUID],
+    optionalServices: [GAN_CUBE_SERVICE_UUID, GAN_INFO_SERVICE_UUID],
   };
 
   if (!options || options.acceptAllDevices) {
@@ -80,12 +99,12 @@ function toBleRequestOptions(options) {
     bleOptions.namePrefix = filter.namePrefix;
   }
 
-  const selectedServices =
-    Array.isArray(filter.services) && filter.services.length > 0
-      ? filter.services.map((service) => normalizeUuid(service))
-      : [];
-  bleOptions.services =
-    selectedServices.length > 0 ? selectedServices : [...defaults.services];
+  const selectedServices = Array.isArray(filter.services)
+    ? filter.services.map((service) => normalizeUuid(service))
+    : [];
+  if (selectedServices.length > 0) {
+    bleOptions.services = selectedServices;
+  }
 
   const optionalServices = Array.isArray(options.optionalServices)
     ? options.optionalServices.map((service) => normalizeUuid(service))

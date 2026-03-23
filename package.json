@@ -1,6 +1,6 @@
 {
   "name": "gan-smartcube-lite",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Minimal GAN smartcube timer with solve history and Ao5",
   "private": true,
   "scripts": {
