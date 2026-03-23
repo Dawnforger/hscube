@@ -13,7 +13,7 @@ const FACE_ORDER = ["U", "R", "F", "D", "L", "B"];
 
 export function createCubeRenderer(container) {
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x121722);
+  scene.background = new THREE.Color(0x1b2334);
 
   const camera = new THREE.PerspectiveCamera(
     45,
@@ -25,15 +25,21 @@ export function createCubeRenderer(container) {
   camera.lookAt(0, 0, 0);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.12;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(container.clientWidth, container.clientHeight);
   container.replaceChildren(renderer.domElement);
 
-  const ambient = new THREE.AmbientLight(0xffffff, 0.72);
+  const ambient = new THREE.AmbientLight(0xffffff, 1.15);
   scene.add(ambient);
-  const dir = new THREE.DirectionalLight(0xffffff, 0.7);
+  const dir = new THREE.DirectionalLight(0xffffff, 1.05);
   dir.position.set(5, 8, 6);
   scene.add(dir);
+  const fill = new THREE.DirectionalLight(0xcfe0ff, 0.55);
+  fill.position.set(-4, 2, -3);
+  scene.add(fill);
 
   const root = new THREE.Group();
   scene.add(root);
@@ -88,15 +94,15 @@ function buildCube(root, stickerMeshes) {
   const planeOffset = 1.04;
   const defaultMaterial = new THREE.MeshStandardMaterial({
     color: 0x2a2e37,
-    roughness: 0.62,
-    metalness: 0.1,
+    roughness: 0.5,
+    metalness: 0.02,
   });
 
   const body = new THREE.Mesh(
     new THREE.BoxGeometry(2.2, 2.2, 2.2),
     new THREE.MeshStandardMaterial({
-      color: 0x1a1e28,
-      roughness: 0.9,
+      color: 0x202735,
+      roughness: 0.76,
       metalness: 0.02,
     }),
   );
