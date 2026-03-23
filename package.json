@@ -13,7 +13,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Dawnforger/hsbot.git"
+    "url": "git+https://github.com/Dawnforger/hscube.git"
   },
   "keywords": [
     "gan",
@@ -24,9 +24,9 @@
   "author": "",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/Dawnforger/hsbot/issues"
+    "url": "https://github.com/Dawnforger/hscube/issues"
   },
-  "homepage": "https://github.com/Dawnforger/hsbot#readme",
+  "homepage": "https://github.com/Dawnforger/hscube#readme",
   "dependencies": {
     "@capacitor-community/bluetooth-le": "^8.1.3",
     "@capacitor/android": "^8.2.0",

@@ -4,7 +4,7 @@ import { installNativeBluetoothShimIfNeeded } from "./nativeBluetooth";
 
 const STORAGE_KEY = "gan-smartcube-lite-solves-v1";
 const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.0.0";
-const RELEASES_API_URL = "https://api.github.com/repos/Dawnforger/hsbot/releases?per_page=20";
+const RELEASES_API_URL = "https://api.github.com/repos/Dawnforger/hscube/releases?per_page=20";
 const SOLVED_CHECK_OPTIONS = {
   ignorePuzzleOrientation: true,
   ignoreCenterOrientation: true,
