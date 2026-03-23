@@ -1,14 +1,10 @@
-import { connectSmartPuzzle } from "cubing/bluetooth";
-import { Capacitor } from "@capacitor/core";
+import { connectGanCube } from "gan-web-bluetooth";
 import { installNativeBluetoothShimIfNeeded } from "./nativeBluetooth";
 
 const STORAGE_KEY = "gan-smartcube-lite-solves-v1";
 const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.0.0";
 const RELEASES_API_URL = "https://api.github.com/repos/Dawnforger/hscube/releases?per_page=20";
-const SOLVED_CHECK_OPTIONS = {
-  ignorePuzzleOrientation: true,
-  ignoreCenterOrientation: true,
-};
+const FACELET_POLL_THROTTLE_MS = 180;
 
 const elements = {
   connectBtn: document.querySelector("#connect-btn"),
@@ -28,8 +24,9 @@ const elements = {
   downloadUpdateBtn: document.querySelector("#download-update-btn"),
 };
 
-let puzzle = null;
-let listeningPuzzle = null;
+let cubeConnection = null;
+let cubeEventsSubscription = null;
+let faceletPollHandle = null;
 let timerRunning = false;
 let timerStartPerfMs = 0;
 let elapsedMs = 0;
@@ -112,6 +109,7 @@ async function onConnectClick() {
   }
 
   elements.connectBtn.disabled = true;
+  elements.disconnectBtn.disabled = true;
   setBluetoothStatus(
     nativeBluetoothActive
       ? "Opening native Bluetooth picker..."
@@ -119,72 +117,120 @@ async function onConnectClick() {
   );
 
   try {
-    const connectedPuzzle = await connectSmartPuzzle();
-    puzzle = connectedPuzzle;
-    listeningPuzzle = connectedPuzzle;
-
-    const name = connectedPuzzle.name() ?? "Unknown cube";
-    setBluetoothStatus(`Connected: ${name}`);
-
-    elements.disconnectBtn.disabled = false;
-    const activePuzzle = connectedPuzzle;
-    connectedPuzzle.addAlgLeafListener((event) => {
-      void onCubeMove(activePuzzle, event);
+    const connection = await connectGanCube(makeMacAddressProvider());
+    cubeConnection = connection;
+    cubeEventsSubscription = connection.events$.subscribe((event) => {
+      void onGanCubeEvent(event);
     });
 
-    const pattern = await connectedPuzzle.getPattern();
-    wasCubeSolved = isPatternSolved(pattern);
+    setBluetoothStatus(`Connected: ${connection.deviceName}`);
+    elements.disconnectBtn.disabled = false;
+
+    // Seed initial state and keep state fresh while solving.
+    await connection.sendCubeCommand({ type: "REQUEST_FACELETS" });
     sawUnsolvedDuringRun = false;
+    wasCubeSolved = true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const normalized = message.toLowerCase();
-    if (normalized.includes("characteristic not found")) {
+    if (
+      normalized.includes("can't find target ble services") ||
+      normalized.includes("characteristic not found")
+    ) {
       setBluetoothStatus(
-        "Connection failed: selected device is not a compatible GAN smart cube.",
+        "Connection failed: this cube protocol is not yet supported in current build.",
+      );
+    } else if (normalized.includes("unable to determine cube mac")) {
+      setBluetoothStatus(
+        "Connection failed: unable to determine cube MAC, please retry pairing.",
       );
     } else {
       setBluetoothStatus(`Connection failed: ${message}`);
     }
+
+    await disconnectCube({ preserveStatus: true });
   } finally {
     elements.connectBtn.disabled = false;
   }
 }
 
-function disconnectCube() {
-  if (puzzle) {
-    puzzle.disconnect();
+async function disconnectCube(options = {}) {
+  const { preserveStatus = false } = options;
+
+  if (faceletPollHandle) {
+    window.clearTimeout(faceletPollHandle);
+    faceletPollHandle = null;
   }
-  puzzle = null;
-  listeningPuzzle = null;
+
+  if (cubeEventsSubscription) {
+    cubeEventsSubscription.unsubscribe();
+    cubeEventsSubscription = null;
+  }
+
+  if (cubeConnection) {
+    await cubeConnection.disconnect().catch(() => undefined);
+    cubeConnection = null;
+  }
+
   elements.disconnectBtn.disabled = true;
-  setBluetoothStatus("Disconnected.");
+  if (!preserveStatus) {
+    setBluetoothStatus("Disconnected.");
+  }
 }
 
-async function onCubeMove(sourcePuzzle, event) {
-  if (!elements.autoTimerCheckbox.checked || !sourcePuzzle || sourcePuzzle !== puzzle) {
+async function onGanCubeEvent(event) {
+  if (!cubeConnection) {
     return;
   }
 
-  const pattern = event.pattern ?? (await sourcePuzzle.getPattern().catch(() => null));
-  if (!pattern) {
+  if (event.type === "DISCONNECT") {
+    await disconnectCube();
     return;
   }
 
-  const cubeIsSolved = isPatternSolved(pattern);
+  if (!elements.autoTimerCheckbox.checked) {
+    return;
+  }
 
+  if (event.type === "MOVE") {
+    if (!timerRunning && wasCubeSolved) {
+      startTimer();
+    }
+    sawUnsolvedDuringRun = true;
+    wasCubeSolved = false;
+    scheduleFaceletPoll();
+    return;
+  }
+
+  if (event.type !== "FACELETS") {
+    return;
+  }
+
+  const cubeIsSolved = isFaceletsSolved(event.facelets);
   if (!timerRunning && wasCubeSolved && !cubeIsSolved) {
     startTimer();
   }
-
   if (timerRunning && !cubeIsSolved) {
     sawUnsolvedDuringRun = true;
   }
-
   if (timerRunning && sawUnsolvedDuringRun && cubeIsSolved) {
     stopTimer({ saveSolve: true, source: "cube" });
   }
-
   wasCubeSolved = cubeIsSolved;
+}
+
+function scheduleFaceletPoll() {
+  if (faceletPollHandle || !cubeConnection) {
+    return;
+  }
+
+  faceletPollHandle = window.setTimeout(async () => {
+    faceletPollHandle = null;
+    if (!cubeConnection) {
+      return;
+    }
+    await cubeConnection.sendCubeCommand({ type: "REQUEST_FACELETS" }).catch(() => undefined);
+  }, FACELET_POLL_THROTTLE_MS);
 }
 
 function startTimer() {
@@ -464,8 +510,49 @@ function compareSemver(a, b) {
   return 0;
 }
 
-function isPatternSolved(pattern) {
-  return pattern.experimentalIsSolved(SOLVED_CHECK_OPTIONS);
+function isFaceletsSolved(facelets) {
+  if (typeof facelets !== "string" || facelets.length < 54) {
+    return false;
+  }
+
+  for (let faceIndex = 0; faceIndex < 6; faceIndex += 1) {
+    const start = faceIndex * 9;
+    const anchor = facelets[start];
+    for (let offset = 1; offset < 9; offset += 1) {
+      if (facelets[start + offset] !== anchor) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+function makeMacAddressProvider() {
+  return async (device, isFallbackCall = false) => {
+    if (!nativeBluetoothActive) {
+      return null;
+    }
+
+    const mac = extractMacFromString(device?.id ?? "");
+    if (mac) {
+      return mac;
+    }
+
+    if (isFallbackCall) {
+      throw new Error("Unable to determine cube MAC from native BLE device ID.");
+    }
+
+    return null;
+  };
+}
+
+function extractMacFromString(value) {
+  const match = String(value).match(/([0-9a-f]{2}[:-]){5}[0-9a-f]{2}/i);
+  if (!match) {
+    return null;
+  }
+  return match[0].replace(/-/g, ":").toUpperCase();
 }
 
 function setUpdateStatus(message) {

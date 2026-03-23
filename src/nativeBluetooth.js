@@ -2,8 +2,9 @@ import { Capacitor } from "@capacitor/core";
 import { BleClient } from "@capacitor-community/bluetooth-le";
 
 let bleInitialized = false;
-const GAN_CUBE_SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb";
-const GAN_INFO_SERVICE_UUID = "0000180a-0000-1000-8000-00805f9b34fb";
+const GAN_GEN2_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dc4179";
+const GAN_GEN3_SERVICE_UUID = "8653000a-43e6-47b7-9cb0-5fc21d4ae340";
+const GAN_GEN4_SERVICE_UUID = "00000010-0000-fff7-fff6-fff5fff4fff0";
 
 export async function installNativeBluetoothShimIfNeeded() {
   if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== "android") {
@@ -62,7 +63,11 @@ async function requestDevice(options = {}) {
     // Fall back to prefix-only filtering before giving up.
     bleDevice = await BleClient.requestDevice({
       namePrefix: "GAN",
-      optionalServices: [GAN_CUBE_SERVICE_UUID, GAN_INFO_SERVICE_UUID],
+      optionalServices: [
+        GAN_GEN2_SERVICE_UUID,
+        GAN_GEN3_SERVICE_UUID,
+        GAN_GEN4_SERVICE_UUID,
+      ],
     });
   }
 
@@ -74,7 +79,11 @@ function toBleRequestOptions(options) {
   // from being cluttered with unrelated BLE peripherals and reduces bad picks.
   const defaults = {
     namePrefix: "GAN",
-    optionalServices: [GAN_CUBE_SERVICE_UUID, GAN_INFO_SERVICE_UUID],
+    optionalServices: [
+      GAN_GEN2_SERVICE_UUID,
+      GAN_GEN3_SERVICE_UUID,
+      GAN_GEN4_SERVICE_UUID,
+    ],
   };
 
   if (!options || options.acceptAllDevices) {
@@ -141,11 +150,30 @@ function pickPreferredFilter(filters) {
     return ganByName;
   }
 
+  const mgByPrefix = filters.find(
+    (filter) =>
+      typeof filter?.namePrefix === "string" &&
+      filter.namePrefix.toUpperCase().startsWith("MG"),
+  );
+  if (mgByPrefix) {
+    return mgByPrefix;
+  }
+
+  const aiCubeByPrefix = filters.find(
+    (filter) =>
+      typeof filter?.namePrefix === "string" &&
+      filter.namePrefix.toUpperCase().startsWith("AICUBE"),
+  );
+  if (aiCubeByPrefix) {
+    return aiCubeByPrefix;
+  }
+
   return filters[0];
 }
 
-class NativeBluetoothDevice {
+class NativeBluetoothDevice extends EventTarget {
   constructor(deviceId, name) {
+    super();
     this.id = deviceId;
     this.name = name;
     this.gatt = new NativeBluetoothRemoteGattServer(this);
@@ -157,6 +185,7 @@ class NativeBluetoothRemoteGattServer {
     this.device = device;
     this.connected = false;
     this.services = new Map();
+    this.serviceDefinitions = null;
   }
 
   async connect() {
@@ -168,6 +197,7 @@ class NativeBluetoothRemoteGattServer {
     await BleClient.disconnect(this.device.id).catch(() => undefined);
     await BleClient.connect(this.device.id, () => {
       this.connected = false;
+      this.device.dispatchEvent(new Event("gattserverdisconnected"));
     });
 
     this.connected = true;
@@ -181,29 +211,75 @@ class NativeBluetoothRemoteGattServer {
 
     this.connected = false;
     void BleClient.disconnect(this.device.id).catch(() => undefined);
+    this.device.dispatchEvent(new Event("gattserverdisconnected"));
+  }
+
+  async getPrimaryServices() {
+    const definitions = await this.ensureServiceDefinitions();
+    return definitions.map((definition) => this.createService(definition));
   }
 
   async getPrimaryService(serviceUuid) {
+    const definitions = await this.ensureServiceDefinitions();
     const normalizedServiceUuid = normalizeUuid(serviceUuid);
-    if (!this.services.has(normalizedServiceUuid)) {
+    const match = definitions.find((definition) => definition.uuid === normalizedServiceUuid);
+    if (!match) {
+      throw new Error(`Service not found: ${normalizedServiceUuid}`);
+    }
+    return this.createService(match);
+  }
+
+  async ensureServiceDefinitions() {
+    if (this.serviceDefinitions) {
+      return this.serviceDefinitions;
+    }
+
+    const services = await BleClient.getServices(this.device.id);
+    this.serviceDefinitions = services.map((service) => ({
+      uuid: normalizeUuid(service.uuid),
+      characteristics: new Set(
+        (service.characteristics ?? []).map((characteristic) =>
+          normalizeUuid(characteristic.uuid),
+        ),
+      ),
+    }));
+
+    return this.serviceDefinitions;
+  }
+
+  createService(definition) {
+    if (!this.services.has(definition.uuid)) {
       this.services.set(
-        normalizedServiceUuid,
-        new NativeBluetoothRemoteGattService(this, normalizedServiceUuid),
+        definition.uuid,
+        new NativeBluetoothRemoteGattService(
+          this,
+          definition.uuid,
+          definition.characteristics,
+        ),
       );
     }
-    return this.services.get(normalizedServiceUuid);
+
+    return this.services.get(definition.uuid);
   }
 }
 
 class NativeBluetoothRemoteGattService {
-  constructor(server, uuid) {
+  constructor(server, uuid, availableCharacteristics) {
     this.server = server;
     this.uuid = uuid;
+    this.availableCharacteristics = availableCharacteristics ?? null;
     this.characteristics = new Map();
   }
 
   async getCharacteristic(characteristicUuid) {
     const normalizedCharacteristicUuid = normalizeUuid(characteristicUuid);
+    if (
+      this.availableCharacteristics &&
+      !this.availableCharacteristics.has(normalizedCharacteristicUuid)
+    ) {
+      throw new Error(`Characteristic not found: ${normalizedCharacteristicUuid}`);
+    }
+
     if (!this.characteristics.has(normalizedCharacteristicUuid)) {
       this.characteristics.set(
         normalizedCharacteristicUuid,
