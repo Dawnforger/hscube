@@ -5,15 +5,35 @@ const STORAGE_KEY = "gan-smartcube-lite-solves-v1";
 const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.0.0";
 const RELEASES_API_URL = "https://api.github.com/repos/Dawnforger/hscube/releases?per_page=20";
 const FACELET_POLL_THROTTLE_MS = 180;
+const SCRAMBLE_LENGTH = 20;
+const MAX_INSPECTION_SECONDS = 30;
+const WORKFLOW_PHASE = {
+  IDLE: "idle",
+  SCRAMBLING: "scrambling",
+  READY_INSPECTION: "ready_inspection",
+  INSPECTION: "inspection",
+  SOLVING: "solving",
+};
+const SCRAMBLE_MODE = {
+  FREE: "free",
+  ALG: "alg",
+};
 
 const elements = {
   connectBtn: document.querySelector("#connect-btn"),
   disconnectBtn: document.querySelector("#disconnect-btn"),
   connectionStatus: document.querySelector("#connection-status"),
   timerDisplay: document.querySelector("#timer-display"),
+  inspectionDisplay: document.querySelector("#inspection-display"),
   manualToggleBtn: document.querySelector("#manual-toggle-btn"),
   resetBtn: document.querySelector("#reset-btn"),
-  autoTimerCheckbox: document.querySelector("#auto-timer-checkbox"),
+  scrambleModeSelect: document.querySelector("#scramble-mode-select"),
+  inspectionSecondsInput: document.querySelector("#inspection-seconds-input"),
+  prepareSolveBtn: document.querySelector("#prepare-solve-btn"),
+  startInspectionBtn: document.querySelector("#start-inspection-btn"),
+  workflowStatus: document.querySelector("#workflow-status"),
+  scrambleDisplay: document.querySelector("#scramble-display"),
+  scrambleProgress: document.querySelector("#scramble-progress"),
   totalSolves: document.querySelector("#total-solves"),
   ao5Value: document.querySelector("#ao5-value"),
   solveList: document.querySelector("#solve-list"),
@@ -31,28 +51,39 @@ let timerRunning = false;
 let timerStartPerfMs = 0;
 let elapsedMs = 0;
 let frameId = null;
-let wasCubeSolved = true;
 let sawUnsolvedDuringRun = false;
 let nativeBluetoothActive = false;
 let latestApkDownloadUrl = null;
+let currentCubeSolved = true;
+
+let workflowPhase = WORKFLOW_PHASE.IDLE;
+let scrambleMode = SCRAMBLE_MODE.ALG;
+let inspectionSeconds = 15;
+let scrambleMoves = [];
+let scrambleStep = 0;
+let scrambleOffTrackMove = null;
+let inspectionEndPerfMs = 0;
+let inspectionFrameId = null;
 
 const solves = loadSolves();
 
 elements.connectBtn.addEventListener("click", onConnectClick);
-elements.disconnectBtn.addEventListener("click", disconnectCube);
+elements.disconnectBtn.addEventListener("click", () => {
+  void disconnectCube();
+});
 elements.manualToggleBtn.addEventListener("click", () => toggleManualTimer());
 elements.resetBtn.addEventListener("click", resetTimer);
+elements.prepareSolveBtn.addEventListener("click", () => {
+  void prepareSolveCycle();
+});
+elements.startInspectionBtn.addEventListener("click", () => startInspection());
+elements.scrambleModeSelect.addEventListener("change", onWorkflowConfigChange);
+elements.inspectionSecondsInput.addEventListener("change", onWorkflowConfigChange);
 elements.clearSolvesBtn.addEventListener("click", clearSolves);
 elements.checkUpdateBtn.addEventListener("click", () => {
   void checkForUpdate({ userInitiated: true });
 });
 elements.downloadUpdateBtn.addEventListener("click", openLatestApk);
-elements.autoTimerCheckbox.addEventListener("change", () => {
-  if (!elements.autoTimerCheckbox.checked) {
-    wasCubeSolved = true;
-    sawUnsolvedDuringRun = false;
-  }
-});
 
 document.addEventListener("keydown", (event) => {
   if (event.code !== "Space" || event.repeat) {
@@ -76,7 +107,9 @@ void bootstrap();
 
 async function bootstrap() {
   renderTimer();
+  renderInspection();
   renderSolves();
+  renderWorkflow();
   elements.appVersion.textContent = APP_VERSION;
   setUpdateStatus("Not checked yet.");
   setBluetoothStatus("Not connected.");
@@ -96,7 +129,7 @@ async function bootstrap() {
   }
 
   if (nativeBluetoothActive) {
-    setBluetoothStatus("Native BLE ready (GAN-compatible filter). Tap Connect Cube.");
+    setBluetoothStatus("Native BLE ready. Connect cube then prepare solve.");
     void checkForUpdate({ userInitiated: false });
   }
 
@@ -125,11 +158,9 @@ async function onConnectClick() {
 
     setBluetoothStatus(`Connected: ${connection.deviceName}`);
     elements.disconnectBtn.disabled = false;
-
-    // Seed initial state and keep state fresh while solving.
-    await connection.sendCubeCommand({ type: "REQUEST_FACELETS" });
+    currentCubeSolved = true;
     sawUnsolvedDuringRun = false;
-    wasCubeSolved = true;
+    await connection.sendCubeCommand({ type: "REQUEST_FACELETS" });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const normalized = message.toLowerCase();
@@ -157,6 +188,12 @@ async function onConnectClick() {
 async function disconnectCube(options = {}) {
   const { preserveStatus = false } = options;
 
+  stopInspection({ resetDisplay: true });
+  if (timerRunning) {
+    stopTimer({ saveSolve: false, source: "manual" });
+  }
+  workflowPhase = WORKFLOW_PHASE.IDLE;
+
   if (faceletPollHandle) {
     window.clearTimeout(faceletPollHandle);
     faceletPollHandle = null;
@@ -176,6 +213,7 @@ async function disconnectCube(options = {}) {
   if (!preserveStatus) {
     setBluetoothStatus("Disconnected.");
   }
+  renderWorkflow();
 }
 
 async function onGanCubeEvent(event) {
@@ -188,16 +226,8 @@ async function onGanCubeEvent(event) {
     return;
   }
 
-  if (!elements.autoTimerCheckbox.checked) {
-    return;
-  }
-
   if (event.type === "MOVE") {
-    if (!timerRunning && wasCubeSolved) {
-      startTimer();
-    }
-    sawUnsolvedDuringRun = true;
-    wasCubeSolved = false;
+    handleAlgScrambleMove(event.move);
     scheduleFaceletPoll();
     return;
   }
@@ -206,17 +236,19 @@ async function onGanCubeEvent(event) {
     return;
   }
 
-  const cubeIsSolved = isFaceletsSolved(event.facelets);
-  if (!timerRunning && wasCubeSolved && !cubeIsSolved) {
-    startTimer();
+  currentCubeSolved = isFaceletsSolved(event.facelets);
+
+  if (workflowPhase === WORKFLOW_PHASE.SOLVING && timerRunning) {
+    if (!currentCubeSolved) {
+      sawUnsolvedDuringRun = true;
+    }
+    if (sawUnsolvedDuringRun && currentCubeSolved) {
+      stopTimer({ saveSolve: true, source: "cube" });
+      workflowPhase = WORKFLOW_PHASE.IDLE;
+      setWorkflowStatus("Solve complete. Prepare next solve.");
+      renderWorkflow();
+    }
   }
-  if (timerRunning && !cubeIsSolved) {
-    sawUnsolvedDuringRun = true;
-  }
-  if (timerRunning && sawUnsolvedDuringRun && cubeIsSolved) {
-    stopTimer({ saveSolve: true, source: "cube" });
-  }
-  wasCubeSolved = cubeIsSolved;
 }
 
 function scheduleFaceletPoll() {
@@ -231,6 +263,164 @@ function scheduleFaceletPoll() {
     }
     await cubeConnection.sendCubeCommand({ type: "REQUEST_FACELETS" }).catch(() => undefined);
   }, FACELET_POLL_THROTTLE_MS);
+}
+
+async function prepareSolveCycle() {
+  if (!cubeConnection) {
+    setWorkflowStatus("Connect cube first.");
+    return;
+  }
+
+  stopInspection({ resetDisplay: true });
+  if (timerRunning) {
+    stopTimer({ saveSolve: false, source: "manual" });
+  }
+  elapsedMs = 0;
+  renderTimer();
+
+  scrambleMode = readScrambleMode();
+  inspectionSeconds = readInspectionSeconds();
+  scrambleStep = 0;
+  scrambleOffTrackMove = null;
+  sawUnsolvedDuringRun = false;
+
+  if (scrambleMode === SCRAMBLE_MODE.FREE) {
+    workflowPhase = WORKFLOW_PHASE.SCRAMBLING;
+    scrambleMoves = [];
+    elements.scrambleDisplay.textContent = "Scramble: Free mode";
+    elements.scrambleProgress.textContent = "Progress: free scramble";
+    setWorkflowStatus("Scramble freely, then tap Start Inspection.");
+    elements.startInspectionBtn.disabled = false;
+  } else {
+    workflowPhase = WORKFLOW_PHASE.SCRAMBLING;
+    scrambleMoves = generateScramble(SCRAMBLE_LENGTH);
+    elements.scrambleDisplay.textContent = `Scramble: ${scrambleMoves.join(" ")}`;
+    elements.startInspectionBtn.disabled = true;
+    updateScrambleProgressText();
+    setWorkflowStatus(`Apply scramble. Next move: ${scrambleMoves[0]}`);
+  }
+
+  await cubeConnection.sendCubeCommand({ type: "REQUEST_FACELETS" }).catch(() => undefined);
+  renderWorkflow();
+}
+
+function handleAlgScrambleMove(moveToken) {
+  if (
+    workflowPhase !== WORKFLOW_PHASE.SCRAMBLING ||
+    scrambleMode !== SCRAMBLE_MODE.ALG ||
+    !scrambleMoves.length
+  ) {
+    return;
+  }
+
+  const move = normalizeMoveToken(moveToken);
+  if (!move) {
+    return;
+  }
+
+  if (scrambleOffTrackMove) {
+    const undoMove = inverseMoveToken(scrambleOffTrackMove);
+    if (move === undoMove) {
+      scrambleOffTrackMove = null;
+      const nextMove = scrambleMoves[scrambleStep];
+      setWorkflowStatus(
+        nextMove
+          ? `Recovered. Continue with ${nextMove}.`
+          : "Recovered. Scramble complete.",
+      );
+      updateScrambleProgressText();
+    } else {
+      setWorkflowStatus(`Off track. Undo with ${undoMove}.`);
+    }
+    return;
+  }
+
+  const expectedMove = scrambleMoves[scrambleStep];
+  if (move === expectedMove) {
+    scrambleStep += 1;
+    if (scrambleStep >= scrambleMoves.length) {
+      workflowPhase = WORKFLOW_PHASE.READY_INSPECTION;
+      setWorkflowStatus("Scramble complete. Tap Start Inspection.");
+      elements.startInspectionBtn.disabled = false;
+    } else {
+      setWorkflowStatus(`Good. Next move: ${scrambleMoves[scrambleStep]}`);
+    }
+    updateScrambleProgressText();
+    renderWorkflow();
+    return;
+  }
+
+  if (scrambleStep > 0 && move === inverseMoveToken(scrambleMoves[scrambleStep - 1])) {
+    scrambleStep -= 1;
+    setWorkflowStatus(`Stepped back. Next move: ${scrambleMoves[scrambleStep]}`);
+    updateScrambleProgressText();
+    return;
+  }
+
+  scrambleOffTrackMove = move;
+  setWorkflowStatus(
+    `Misstep. Expected ${expectedMove}. Undo with ${inverseMoveToken(move)}.`,
+  );
+}
+
+function startInspection() {
+  const canStart =
+    workflowPhase === WORKFLOW_PHASE.READY_INSPECTION ||
+    (workflowPhase === WORKFLOW_PHASE.SCRAMBLING &&
+      scrambleMode === SCRAMBLE_MODE.FREE);
+  if (!canStart) {
+    return;
+  }
+
+  stopInspection({ resetDisplay: false });
+  workflowPhase = WORKFLOW_PHASE.INSPECTION;
+  inspectionEndPerfMs = performance.now() + inspectionSeconds * 1000;
+  setWorkflowStatus(`Inspection started (${inspectionSeconds}s).`);
+  elements.startInspectionBtn.disabled = true;
+  renderWorkflow();
+  tickInspection();
+}
+
+function tickInspection() {
+  if (workflowPhase !== WORKFLOW_PHASE.INSPECTION) {
+    return;
+  }
+
+  const remainingMs = inspectionEndPerfMs - performance.now();
+  if (remainingMs <= 0) {
+    stopInspection({ resetDisplay: false });
+    elements.inspectionDisplay.textContent = "Inspection: GO!";
+    beginSolveTimer();
+    return;
+  }
+
+  elements.inspectionDisplay.textContent = `Inspection: ${formatInspectionTime(remainingMs)}`;
+  inspectionFrameId = requestAnimationFrame(tickInspection);
+}
+
+function stopInspection({ resetDisplay }) {
+  if (inspectionFrameId) {
+    cancelAnimationFrame(inspectionFrameId);
+    inspectionFrameId = null;
+  }
+
+  if (resetDisplay) {
+    renderInspection();
+  }
+}
+
+function beginSolveTimer() {
+  if (timerRunning) {
+    stopTimer({ saveSolve: false, source: "manual" });
+  }
+
+  workflowPhase = WORKFLOW_PHASE.SOLVING;
+  elapsedMs = 0;
+  renderTimer();
+  sawUnsolvedDuringRun = !currentCubeSolved;
+  startTimer();
+  setWorkflowStatus("Solve timer running...");
+  renderWorkflow();
 }
 
 function startTimer() {
@@ -259,20 +449,37 @@ function stopTimer({ saveSolve, source }) {
 }
 
 function toggleManualTimer() {
-  if (timerRunning) {
-    stopTimer({ saveSolve: true, source: "manual" });
+  if (workflowPhase === WORKFLOW_PHASE.INSPECTION) {
     return;
   }
+
+  if (timerRunning) {
+    stopTimer({ saveSolve: true, source: "manual" });
+    workflowPhase = WORKFLOW_PHASE.IDLE;
+    setWorkflowStatus("Manual solve recorded.");
+    renderWorkflow();
+    return;
+  }
+
+  workflowPhase = WORKFLOW_PHASE.SOLVING;
   sawUnsolvedDuringRun = true;
   startTimer();
+  setWorkflowStatus("Manual timer running.");
+  renderWorkflow();
 }
 
 function resetTimer() {
+  stopInspection({ resetDisplay: true });
   if (timerRunning) {
     stopTimer({ saveSolve: false, source: "manual" });
   }
   elapsedMs = 0;
   renderTimer();
+  if (workflowPhase === WORKFLOW_PHASE.INSPECTION || workflowPhase === WORKFLOW_PHASE.SOLVING) {
+    workflowPhase = WORKFLOW_PHASE.IDLE;
+    setWorkflowStatus("Solve cycle reset.");
+    renderWorkflow();
+  }
 }
 
 function tickTimer() {
@@ -283,6 +490,84 @@ function tickTimer() {
   renderTimer();
   elements.manualToggleBtn.textContent = "Stop (Space)";
   frameId = requestAnimationFrame(tickTimer);
+}
+
+function onWorkflowConfigChange() {
+  scrambleMode = readScrambleMode();
+  inspectionSeconds = readInspectionSeconds();
+  if (workflowPhase === WORKFLOW_PHASE.IDLE) {
+    renderWorkflow();
+  }
+}
+
+function renderWorkflow() {
+  switch (workflowPhase) {
+    case WORKFLOW_PHASE.IDLE:
+      elements.startInspectionBtn.disabled = true;
+      if (scrambleMode === SCRAMBLE_MODE.ALG) {
+        elements.scrambleDisplay.textContent = "Scramble: (generated on Prepare Solve)";
+      } else {
+        elements.scrambleDisplay.textContent = "Scramble: Free mode";
+      }
+      elements.scrambleProgress.textContent = `Inspection: ${inspectionSeconds}s`;
+      if (!elements.workflowStatus.textContent.trim()) {
+        setWorkflowStatus("No active solve cycle.");
+      }
+      break;
+    case WORKFLOW_PHASE.SCRAMBLING:
+      elements.startInspectionBtn.disabled = scrambleMode !== SCRAMBLE_MODE.FREE;
+      break;
+    case WORKFLOW_PHASE.READY_INSPECTION:
+      elements.startInspectionBtn.disabled = false;
+      break;
+    case WORKFLOW_PHASE.INSPECTION:
+    case WORKFLOW_PHASE.SOLVING:
+      elements.startInspectionBtn.disabled = true;
+      break;
+    default:
+      break;
+  }
+}
+
+function renderTimer() {
+  elements.timerDisplay.textContent = formatTime(elapsedMs);
+}
+
+function renderInspection() {
+  elements.inspectionDisplay.textContent = "Inspection: --";
+}
+
+function updateScrambleProgressText() {
+  if (!scrambleMoves.length) {
+    elements.scrambleProgress.textContent = "Progress: free scramble";
+    return;
+  }
+
+  if (scrambleStep >= scrambleMoves.length) {
+    elements.scrambleProgress.textContent = `Progress: ${scrambleMoves.length} / ${scrambleMoves.length} (done)`;
+    return;
+  }
+
+  elements.scrambleProgress.textContent = `Progress: ${scrambleStep} / ${scrambleMoves.length} (next ${scrambleMoves[scrambleStep]})`;
+}
+
+function readScrambleMode() {
+  return elements.scrambleModeSelect.value === SCRAMBLE_MODE.FREE
+    ? SCRAMBLE_MODE.FREE
+    : SCRAMBLE_MODE.ALG;
+}
+
+function readInspectionSeconds() {
+  const parsed = Number.parseInt(elements.inspectionSecondsInput.value, 10);
+  const safe = Number.isFinite(parsed) ? parsed : 15;
+  const clamped = Math.min(MAX_INSPECTION_SECONDS, Math.max(0, safe));
+  elements.inspectionSecondsInput.value = String(clamped);
+  return clamped;
+}
+
+function formatInspectionTime(remainingMs) {
+  const seconds = Math.max(0, remainingMs) / 1000;
+  return `${seconds.toFixed(1)}s`;
 }
 
 function addSolve(timeMs, source) {
@@ -385,10 +670,6 @@ function openLatestApk() {
   }
 
   window.open(latestApkDownloadUrl, "_blank", "noopener,noreferrer");
-}
-
-function renderTimer() {
-  elements.timerDisplay.textContent = formatTime(elapsedMs);
 }
 
 function renderSolves() {
@@ -510,24 +791,6 @@ function compareSemver(a, b) {
   return 0;
 }
 
-function isFaceletsSolved(facelets) {
-  if (typeof facelets !== "string" || facelets.length < 54) {
-    return false;
-  }
-
-  for (let faceIndex = 0; faceIndex < 6; faceIndex += 1) {
-    const start = faceIndex * 9;
-    const anchor = facelets[start];
-    for (let offset = 1; offset < 9; offset += 1) {
-      if (facelets[start + offset] !== anchor) {
-        return false;
-      }
-    }
-  }
-
-  return true;
-}
-
 function makeMacAddressProvider() {
   return async (device, isFallbackCall = false) => {
     if (!nativeBluetoothActive) {
@@ -555,10 +818,91 @@ function extractMacFromString(value) {
   return match[0].replace(/-/g, ":").toUpperCase();
 }
 
+function isFaceletsSolved(facelets) {
+  if (typeof facelets !== "string" || facelets.length < 54) {
+    return false;
+  }
+
+  for (let faceIndex = 0; faceIndex < 6; faceIndex += 1) {
+    const start = faceIndex * 9;
+    const anchor = facelets[start];
+    for (let offset = 1; offset < 9; offset += 1) {
+      if (facelets[start + offset] !== anchor) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+function generateScramble(length) {
+  const faces = ["U", "R", "F", "D", "L", "B"];
+  const suffixes = ["", "'", "2"];
+  const axisMap = {
+    U: "UD",
+    D: "UD",
+    R: "RL",
+    L: "RL",
+    F: "FB",
+    B: "FB",
+  };
+  const scramble = [];
+
+  while (scramble.length < length) {
+    const face = faces[Math.floor(Math.random() * faces.length)];
+    const previous = scramble[scramble.length - 1];
+    const prevFace = previous ? previous[0] : null;
+    const prevAxis = prevFace ? axisMap[prevFace] : null;
+
+    if (face === prevFace) {
+      continue;
+    }
+    if (
+      scramble.length > 1 &&
+      prevAxis &&
+      axisMap[face] === prevAxis &&
+      axisMap[scramble[scramble.length - 2][0]] === prevAxis
+    ) {
+      continue;
+    }
+
+    const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
+    scramble.push(`${face}${suffix}`);
+  }
+
+  return scramble;
+}
+
+function normalizeMoveToken(moveToken) {
+  const match = String(moveToken ?? "").trim().match(/^([URFDLB])(2|'|)?$/i);
+  if (!match) {
+    return null;
+  }
+
+  const face = match[1].toUpperCase();
+  const suffix = match[2] ?? "";
+  return `${face}${suffix}`;
+}
+
+function inverseMoveToken(move) {
+  if (move.endsWith("2")) {
+    return move;
+  }
+  if (move.endsWith("'")) {
+    return move.slice(0, -1);
+  }
+  return `${move}'`;
+}
+
 function setUpdateStatus(message) {
   elements.updateStatus.textContent = message;
 }
 
 function setBluetoothStatus(message) {
   elements.connectionStatus.textContent = message;
+}
+
+function setWorkflowStatus(message) {
+  elements.workflowStatus.textContent = message;
 }

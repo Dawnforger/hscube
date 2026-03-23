@@ -1,11 +1,11 @@
 # GAN Smartcube Lite
 
-Current app version: **1.1.3**
+Current app version: **1.2.0**
 
 Minimal open source replacement app for CubeStation focused on:
 
 - Bluetooth connection to GAN smart cubes (including GAN i3) via Web Bluetooth
-- Streamlined timer (manual and auto start/stop from cube state)
+- Solve workflow with configurable scramble mode (free or algorithm) and inspection timer
 - Solve history persistence in local storage
 - Ao5 for the latest five solves (WCA-style trimmed mean)
 
@@ -65,3 +65,19 @@ Notes:
   - If a newer semantic version is found, the app offers an **Open latest APK** action.
 
 Important: Android still requires OS-level APK installation confirmation for sideloaded updates.
+
+## Solve workflow UX
+
+- Configure on screen:
+  - Scramble mode: **Free scramble** or **Algorithm scramble**
+  - Inspection duration (0-30 seconds)
+- Algorithm scramble mode:
+  - App generates and displays the scramble algorithm
+  - Live progress and next-move guidance
+  - Misstep recovery hint (what move to undo)
+- Free scramble mode:
+  - User scrambles independently and starts inspection when ready
+- After scrambling:
+  - User taps **Start Inspection**
+  - Inspection countdown runs
+  - Solve timer auto-starts when inspection reaches zero

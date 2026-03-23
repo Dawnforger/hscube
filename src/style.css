@@ -67,6 +67,7 @@ button:disabled {
 
 .connection-controls,
 .timer-controls,
+.workflow-controls,
 .update-controls,
 .history-header {
   display: flex;
@@ -95,11 +96,49 @@ button:disabled {
   font-weight: 700;
 }
 
-.checkbox-row {
-  margin-top: 0.85rem;
-  display: inline-flex;
-  gap: 0.5rem;
-  align-items: center;
+.inspection-display {
+  margin: -0.35rem 0 0.85rem;
+  color: #c7cfde;
+  font-variant-numeric: tabular-nums;
+}
+
+.workflow-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-bottom: 0.8rem;
+}
+
+.field-label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 600;
+  color: #d2d9e8;
+}
+
+.field-label select,
+.field-label input {
+  border: 1px solid #3f4f70;
+  border-radius: 10px;
+  background: #222b3a;
+  color: #f8f9fa;
+  padding: 0.48rem 0.6rem;
+}
+
+#workflow-status {
+  margin: 0.8rem 0 0.45rem;
+  color: #c7cfde;
+}
+
+.mono-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-word;
+}
+
+#scramble-display,
+#scramble-progress {
+  margin: 0.2rem 0;
+  color: #c7cfde;
 }
 
 #solve-list {
