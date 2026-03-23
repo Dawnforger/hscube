@@ -28,3 +28,22 @@ npm run build
 ```
 
 The production bundle is generated in `dist/`.
+
+## Rough Android APK prototype
+
+This project includes a Capacitor Android wrapper so you can generate a test APK.
+
+```bash
+npm install
+npm run apk:debug
+```
+
+Generated APK path:
+
+`android/app/build/outputs/apk/debug/app-debug.apk`
+
+Notes:
+
+- This is a rough prototype package for testing UI/timer flows.
+- Bluetooth behavior inside Android WebView can differ from desktop Chrome Web Bluetooth support.
+- For robust native BLE behavior on Android devices, a follow-up native BLE bridge/plugin path is recommended.
