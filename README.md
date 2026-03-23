@@ -1,5 +1,7 @@
 # GAN Smartcube Lite
 
+Current app version: **1.1.0**
+
 Minimal open source replacement app for CubeStation focused on:
 
 - Bluetooth connection to GAN smart cubes (including GAN i3) via Web Bluetooth
@@ -50,3 +52,16 @@ Notes:
 - Android builds use a native BLE transport (Capacitor BLE plugin), not Web Bluetooth.
 - Android native BLE picker is intentionally filtered to GAN-compatible devices.
 - Desktop browser builds continue to use Web Bluetooth.
+
+## Versioning and in-app update checks
+
+- The app now exposes its version in the UI header.
+- Version source:
+  - `package.json` (`version`)
+  - `android/app/build.gradle` (`versionCode`, `versionName`)
+- In-app update flow:
+  - Tap **Check for update** in the **Updates** card.
+  - The app queries GitHub Releases for the latest APK asset.
+  - If a newer semantic version is found, the app offers an **Open latest APK** action.
+
+Important: Android still requires OS-level APK installation confirmation for sideloaded updates.

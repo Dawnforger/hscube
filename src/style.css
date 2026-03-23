@@ -34,6 +34,11 @@ body {
   color: #c7cfde;
 }
 
+.meta-line {
+  margin: 0.3rem 0 0;
+  color: #a4b0c7;
+}
+
 .card {
   border: 1px solid #30384a;
   border-radius: 12px;
@@ -62,6 +67,7 @@ button:disabled {
 
 .connection-controls,
 .timer-controls,
+.update-controls,
 .history-header {
   display: flex;
   gap: 0.65rem;
@@ -74,6 +80,11 @@ button:disabled {
 
 #connection-status {
   margin: 0.75rem 0 0;
+  color: #c7cfde;
+}
+
+#update-status {
+  margin: 0.15rem 0 0.85rem;
   color: #c7cfde;
 }
 

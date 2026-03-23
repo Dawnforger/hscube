@@ -11,6 +11,7 @@
       <header class="app-header">
         <h1>GAN Smartcube Lite</h1>
         <p class="subtitle">Timer + GAN i3 Bluetooth + solve history</p>
+        <p class="meta-line">App version: <strong id="app-version">-</strong></p>
       </header>
 
       <section class="card connection-card">
@@ -33,6 +34,15 @@
           <input id="auto-timer-checkbox" type="checkbox" checked />
           Auto-start/stop from cube state
         </label>
+      </section>
+
+      <section class="card update-card">
+        <h2>Updates</h2>
+        <p id="update-status">Not checked yet.</p>
+        <div class="update-controls">
+          <button id="check-update-btn">Check for update</button>
+          <button id="download-update-btn" disabled>Open latest APK</button>
+        </div>
       </section>
 
       <section class="card stats-card">
