@@ -843,14 +843,47 @@ function saveSolves(value) {
 }
 
 function pickLatestApkRelease(releases) {
-  return releases.find(
-    (release) =>
-      !release?.draft &&
-      Array.isArray(release?.assets) &&
-      release.assets.some((asset) =>
-        String(asset?.name ?? "").toLowerCase().endsWith(".apk"),
-      ),
-  );
+  if (!Array.isArray(releases)) {
+    return null;
+  }
+  const candidates = [];
+  for (const release of releases) {
+    if (release?.draft || !Array.isArray(release?.assets)) {
+      continue;
+    }
+    const apkAsset = release.assets.find((asset) =>
+      String(asset?.name ?? "").toLowerCase().endsWith(".apk"),
+    );
+    if (!apkAsset) {
+      continue;
+    }
+    const version =
+      parseVersion(release.tag_name) ??
+      parseVersion(release.name) ??
+      parseVersion(apkAsset.name);
+    candidates.push({
+      release,
+      version,
+      published: new Date(release.published_at ?? 0).getTime(),
+    });
+  }
+  if (!candidates.length) {
+    return null;
+  }
+  candidates.sort((a, b) => {
+    if (a.version && b.version) {
+      const cmp = compareSemver(a.version, b.version);
+      if (cmp !== 0) {
+        return -cmp;
+      }
+    } else if (a.version) {
+      return -1;
+    } else if (b.version) {
+      return 1;
+    }
+    return b.published - a.published;
+  });
+  return candidates[0].release;
 }
 
 function parseVersion(value) {
