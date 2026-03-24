@@ -41,18 +41,22 @@
             <h2>Cube Sync</h2>
             <button id="reset-cube-sync-btn">Reset Cube Data</button>
           </div>
-          <p id="cube-sync-status">Waiting for cube state...</p>
-          <div id="cube-viewport" class="cube-viewport"></div>
-        </section>
-
-        <section class="card timer-card">
-          <h2>Timer</h2>
-          <p id="timer-display" class="timer-display">0.00</p>
-          <p id="inspection-display" class="inspection-display">Inspection: --</p>
-          <div class="timer-controls">
-            <button id="manual-toggle-btn">Start / Stop (Space)</button>
-            <button id="reset-btn">Reset</button>
+          <div class="cube-status-row">
+            <p id="cube-sync-status">Waiting for cube state...</p>
+            <p id="inspection-display" class="inspection-display compact">Inspection: --</p>
           </div>
+          <div class="timer-inline">
+            <p id="timer-display" class="timer-display compact">0.00</p>
+            <div class="timer-controls timer-controls-compact">
+              <button id="manual-toggle-btn">Start / Stop (Space)</button>
+              <button id="reset-btn">Reset</button>
+            </div>
+          </div>
+          <div class="cube-action-row">
+            <button id="prepare-solve-btn">Prepare Solve</button>
+            <button id="start-inspection-btn" disabled>Start Inspection</button>
+          </div>
+          <div id="cube-viewport" class="cube-viewport"></div>
         </section>
 
         <section class="card workflow-card">
@@ -69,10 +73,6 @@
               Inspection seconds
               <input id="inspection-seconds-input" type="number" min="0" max="30" step="1" value="15" />
             </label>
-          </div>
-          <div class="workflow-controls">
-            <button id="prepare-solve-btn">Prepare Solve</button>
-            <button id="start-inspection-btn" disabled>Start Inspection</button>
           </div>
           <p id="workflow-status">No active solve cycle.</p>
           <p id="scramble-display" class="mono-text">Scramble: -</p>

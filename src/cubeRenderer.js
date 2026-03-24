@@ -91,6 +91,13 @@ export function createCubeRenderer(container) {
   scene.addEventListener("pointerup", endDrag);
   scene.addEventListener("pointercancel", endDrag);
 
+  let rafId = null;
+  const resizeObserver = new ResizeObserver(() => {
+    applyCubeSize();
+  });
+  resizeObserver.observe(scene);
+  applyCubeSize();
+
   return {
     updateFromFacelets(facelets) {
       applyFacelets(stickers, facelets);
@@ -100,12 +107,31 @@ export function createCubeRenderer(container) {
       scene.removeEventListener("pointermove", onPointerMove);
       scene.removeEventListener("pointerup", endDrag);
       scene.removeEventListener("pointercancel", endDrag);
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+      }
+      resizeObserver.disconnect();
       container.replaceChildren();
     },
   };
 
   function renderRotation() {
     cube.style.transform = `rotateX(${rotX}deg) rotateY(${rotY}deg)`;
+  }
+
+  function applyCubeSize() {
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+    }
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      const width = Math.max(1, scene.clientWidth);
+      const height = Math.max(1, scene.clientHeight);
+      const base = Math.min(width, height);
+      // Scale below the full box so projected corners stay inside viewport.
+      const cubeSize = Math.max(96, Math.min(170, Math.floor(base * 0.54)));
+      cube.style.setProperty("--cube-size", `${cubeSize}px`);
+    });
   }
 }
 
