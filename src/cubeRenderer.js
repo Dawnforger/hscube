@@ -26,11 +26,16 @@ export function createCubeRenderer(container) {
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  // Stickers use MeshBasicMaterial; lighter mapping keeps plastics vivid on all GPUs.
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.12;
+  renderer.toneMappingExposure = 1.25;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(container.clientWidth, container.clientHeight);
   container.replaceChildren(renderer.domElement);
+
+  const canvas = renderer.domElement;
+  canvas.style.touchAction = "none";
+  canvas.style.cursor = "grab";
 
   const ambient = new THREE.AmbientLight(0xffffff, 1.15);
   scene.add(ambient);
@@ -50,13 +55,56 @@ export function createCubeRenderer(container) {
   root.rotation.x = -0.52;
   root.rotation.y = 0.69;
 
+  const ROTATE_SPEED = 0.0055;
+  const tiltLimit = Math.PI / 2 - 0.12;
+  let dragPointerId = null;
+  let lastX = 0;
+  let lastY = 0;
+
+  const onPointerDown = (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+    dragPointerId = event.pointerId;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    canvas.setPointerCapture(event.pointerId);
+    canvas.style.cursor = "grabbing";
+  };
+
+  const onPointerMove = (event) => {
+    if (dragPointerId !== event.pointerId) {
+      return;
+    }
+    const dx = event.clientX - lastX;
+    const dy = event.clientY - lastY;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    root.rotation.y += dx * ROTATE_SPEED;
+    root.rotation.x += dy * ROTATE_SPEED;
+    root.rotation.x = Math.max(-tiltLimit, Math.min(tiltLimit, root.rotation.x));
+  };
+
+  const endDrag = (event) => {
+    if (dragPointerId !== event.pointerId) {
+      return;
+    }
+    dragPointerId = null;
+    canvas.releasePointerCapture(event.pointerId);
+    canvas.style.cursor = "grab";
+  };
+
+  canvas.addEventListener("pointerdown", onPointerDown);
+  canvas.addEventListener("pointermove", onPointerMove);
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+
   let raf = null;
   let alive = true;
   const animate = () => {
     if (!alive) {
       return;
     }
-    root.rotation.y += 0.0022;
     renderer.render(scene, camera);
     raf = requestAnimationFrame(animate);
   };
@@ -79,6 +127,10 @@ export function createCubeRenderer(container) {
     },
     destroy() {
       alive = false;
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", endDrag);
+      canvas.removeEventListener("pointercancel", endDrag);
       if (raf) {
         cancelAnimationFrame(raf);
       }
@@ -92,11 +144,8 @@ function buildCube(root, stickerMeshes) {
   const spacing = 0.68;
   const size = 0.6;
   const planeOffset = 1.04;
-  const defaultMaterial = new THREE.MeshStandardMaterial({
-    color: 0x2a2e37,
-    roughness: 0.5,
-    metalness: 0.02,
-  });
+  // BasicMaterial: sticker colors stay correct regardless of lighting / tone mapping.
+  const defaultMaterial = new THREE.MeshBasicMaterial({ color: 0x8892a8 });
 
   const body = new THREE.Mesh(
     new THREE.BoxGeometry(2.2, 2.2, 2.2),
