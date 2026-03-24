@@ -6,7 +6,7 @@ import {
   setNativePreferredDevice,
 } from "./nativeBluetooth";
 
-const STORAGE_KEY = "gan-smartcube-lite-solves-v1";
+const STORAGE_KEY = "hs-cube-solves-v1";
 const KNOWN_CUBES_KEY = "gan-smartcube-known-cubes-v1";
 const LAST_CUBE_KEY = "gan-smartcube-last-cube-v1";
 const AUTO_CONNECT_LAST_CUBE_KEY = "gan-smartcube-auto-connect-last-cube-v1";

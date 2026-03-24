@@ -15,7 +15,7 @@ TAG="${1:?Usage: $0 v1.2.3 \"release notes\"}"
 NOTES="${2:-Release $TAG}"
 VERSION="${TAG#v}"
 APK_SRC="$ROOT/android/app/build/outputs/apk/debug/app-debug.apk"
-APK_NAME="gan-smartcube-lite-${VERSION}-debug.apk"
+APK_NAME="hs-cube-v${VERSION}-debug.apk"
 
 if [[ ! -f "$APK_SRC" ]]; then
   echo "Missing $APK_SRC — run npm run apk:debug first."
@@ -35,7 +35,7 @@ cp "$APK_SRC" "$TMP/$APK_NAME"
 if git rev-parse "$TAG" >/dev/null 2>&1; then
   gh release create "$TAG" "$TMP/$APK_NAME" \
     --repo Dawnforger/hscube \
-    --title "GAN Smartcube Lite $TAG" \
+    --title "HS Cube $TAG" \
     --notes "$NOTES"
 else
   TARGET="$(git symbolic-ref -q --short HEAD 2>/dev/null || true)"
@@ -44,7 +44,7 @@ else
   fi
   gh release create "$TAG" "$TMP/$APK_NAME" \
     --repo Dawnforger/hscube \
-    --title "GAN Smartcube Lite $TAG" \
+    --title "HS Cube $TAG" \
     --notes "$NOTES" \
     --target "$TARGET"
 fi
