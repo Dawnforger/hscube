@@ -1412,7 +1412,11 @@ function setCubeSyncStatus(message) {
 
 function onHardwareEvent(event) {
   if (typeof event?.gyroSupported === "boolean") {
-    orientationSupportedByCube = event.gyroSupported;
+    // Keep explicit "true" from hardware info, but do not hard-lock to false:
+    // some models report false while still sending gyro events.
+    if (event.gyroSupported || orientationSupportedByCube === null) {
+      orientationSupportedByCube = event.gyroSupported;
+    }
   } else if (orientationSupportedByCube === null) {
     orientationSupportedByCube = true;
   }
@@ -1424,6 +1428,11 @@ function onGyroEvent(event) {
   latestGyroQuaternion = normalizeQuaternion(event?.quaternion);
   if (!latestGyroQuaternion) {
     return;
+  }
+  if (orientationSupportedByCube !== true) {
+    orientationSupportedByCube = true;
+    updateOrientationSyncStatus();
+    updateOrientationCalibrationStatus();
   }
   recentGyroSamples.push(latestGyroQuaternion);
   if (recentGyroSamples.length > 240) {
