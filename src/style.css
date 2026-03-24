@@ -126,6 +126,13 @@ body {
   background: #31415f;
 }
 
+.drawer-link-note {
+  margin: 0;
+  color: #98a7c5;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
 h2 {
   margin-top: 0;
 }
@@ -163,6 +170,53 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.connect-meta {
+  margin-top: 0.55rem;
+  display: grid;
+  gap: 0.32rem;
+}
+
+.connect-meta-row {
+  margin: 0;
+  color: #a6b2c9;
+  font-size: 0.9rem;
+}
+
+.connect-meta-row strong {
+  color: #d8e1f2;
+}
+
+.connect-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.connection-memory-row {
+  margin-top: 0.6rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #d2d9e8;
+  font-weight: 600;
+}
+
+.toggle-label input[type="checkbox"] {
+  accent-color: #6f8ecb;
+}
+
+#remembered-cubes-status {
+  margin: 0.35rem 0 0;
+}
+
 #connection-status {
   margin: 0.75rem 0 0;
   color: #c7cfde;
@@ -171,6 +225,15 @@ button:disabled {
 #update-status {
   margin: 0.15rem 0 0.85rem;
   color: #c7cfde;
+}
+
+.updates-screen-note {
+  margin: -0.1rem 0 0.8rem;
+  color: #aebad1;
+}
+
+.updates-screen {
+  align-content: start;
 }
 
 .timer-display {
@@ -417,6 +480,12 @@ button:disabled {
 @media (max-width: 520px) {
   .app {
     padding: 0.9rem;
+  }
+  .connect-actions {
+    width: 100%;
+  }
+  .connect-actions button {
+    flex: 1 1 auto;
   }
   .cube-status-row {
     grid-template-columns: 1fr;

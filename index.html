@@ -12,6 +12,7 @@
       <p class="drawer-title">Navigation</p>
       <button id="nav-solve-btn" class="drawer-link active">Solve</button>
       <button id="nav-records-btn" class="drawer-link">Records</button>
+      <button id="nav-updates-btn" class="drawer-link">Updates</button>
     </aside>
 
     <main class="app">
@@ -34,6 +35,14 @@
             <button id="disconnect-btn" disabled>Disconnect</button>
           </div>
           <p id="connection-status">Not connected.</p>
+          <div class="connection-memory-row">
+            <label class="toggle-label" for="auto-connect-checkbox">
+              <input id="auto-connect-checkbox" type="checkbox" checked />
+              Auto-connect last cube
+            </label>
+            <button id="forget-cubes-btn">Forget Cubes</button>
+          </div>
+          <p id="remembered-cubes-status" class="meta-line">Remembered cubes: none</p>
         </section>
 
         <section class="card cube-card">
@@ -79,14 +88,6 @@
           <p id="scramble-progress">Progress: 0 / 0</p>
         </section>
 
-        <section class="card update-card">
-          <h2>Updates</h2>
-          <p id="update-status">Not checked yet.</p>
-          <div class="update-controls">
-            <button id="check-update-btn">Check for update</button>
-            <button id="download-update-btn" disabled>Open latest APK</button>
-          </div>
-        </section>
       </section>
 
       <section id="records-screen" class="screen">
@@ -102,6 +103,17 @@
             <button id="clear-solves-btn">Clear</button>
           </div>
           <ol id="solve-list"></ol>
+        </section>
+      </section>
+
+      <section id="updates-screen" class="screen">
+        <section class="card update-card">
+          <h2>Updates</h2>
+          <p id="update-status">Not checked yet.</p>
+          <div class="update-controls">
+            <button id="check-update-btn">Check for update</button>
+            <button id="download-update-btn" disabled>Open latest APK</button>
+          </div>
         </section>
       </section>
     </main>

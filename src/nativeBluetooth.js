@@ -2,9 +2,21 @@ import { Capacitor } from "@capacitor/core";
 import { BleClient } from "@capacitor-community/bluetooth-le";
 
 let bleInitialized = false;
+let preferredNativeDeviceId = null;
+let preferredDevicePickerSuppressed = false;
 const GAN_GEN2_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dc4179";
 const GAN_GEN3_SERVICE_UUID = "8653000a-43e6-47b7-9cb0-5fc21d4ae340";
 const GAN_GEN4_SERVICE_UUID = "00000010-0000-fff7-fff6-fff5fff4fff0";
+
+export function setNativePreferredDevice(deviceId, options = {}) {
+  preferredNativeDeviceId = typeof deviceId === "string" && deviceId ? deviceId : null;
+  preferredDevicePickerSuppressed = Boolean(options?.suppressPickerOnFailure);
+}
+
+export function clearNativePreferredDevice() {
+  preferredNativeDeviceId = null;
+  preferredDevicePickerSuppressed = false;
+}
 
 export async function installNativeBluetoothShimIfNeeded() {
   if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== "android") {
@@ -44,6 +56,24 @@ async function ensureBleInitialized() {
 async function requestDevice(options = {}) {
   await ensureBleInitialized();
 
+  if (preferredNativeDeviceId) {
+    const maybeKnown = await BleClient.getDevices({
+      deviceIds: [preferredNativeDeviceId],
+    }).catch(() => ({ devices: [] }));
+    const knownDevice = maybeKnown?.devices?.[0];
+    if (knownDevice?.deviceId) {
+      preferredDevicePickerSuppressed = false;
+      return new NativeBluetoothDevice(
+        knownDevice.deviceId,
+        knownDevice.name ?? "Known cube",
+      );
+    }
+
+    if (preferredDevicePickerSuppressed) {
+      throw new Error("Preferred device unavailable for auto-connect.");
+    }
+  }
+
   const requestOptions = toBleRequestOptions(options);
   let bleDevice;
   try {
@@ -71,6 +101,8 @@ async function requestDevice(options = {}) {
     });
   }
 
+  preferredNativeDeviceId = bleDevice.deviceId;
+  preferredDevicePickerSuppressed = false;
   return new NativeBluetoothDevice(bleDevice.deviceId, bleDevice.name ?? "Unknown cube");
 }
 
