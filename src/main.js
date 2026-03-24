@@ -76,6 +76,7 @@ let scrambleMode = SCRAMBLE_MODE.ALG;
 let inspectionSeconds = 15;
 let scrambleMoves = [];
 let scrambleStep = 0;
+let pendingDoubleMoveToken = null;
 let scrambleOffTrackMove = null;
 let inspectionEndPerfMs = 0;
 let inspectionFrameId = null;
@@ -315,6 +316,7 @@ async function prepareSolveCycle() {
   scrambleMode = readScrambleMode();
   inspectionSeconds = readInspectionSeconds();
   scrambleStep = 0;
+  pendingDoubleMoveToken = null;
   scrambleOffTrackMove = null;
   sawUnsolvedDuringRun = false;
 
@@ -356,7 +358,8 @@ function handleAlgScrambleMove(moveToken) {
     const undoMove = inverseMoveToken(scrambleOffTrackMove);
     if (move === undoMove) {
       scrambleOffTrackMove = null;
-      const nextMove = scrambleMoves[scrambleStep];
+      pendingDoubleMoveToken = null;
+      const nextMove = describeExpectedMove(scrambleMoves[scrambleStep]);
       setWorkflowStatus(
         nextMove
           ? `Recovered. Continue with ${nextMove}.`
@@ -370,30 +373,46 @@ function handleAlgScrambleMove(moveToken) {
   }
 
   const expectedMove = scrambleMoves[scrambleStep];
-  if (move === expectedMove) {
+  const expectedConsume = consumeExpectedMove(expectedMove, move);
+  if (expectedConsume.handled && !expectedConsume.advanced) {
+    pendingDoubleMoveToken = expectedConsume.pending;
+    if (expectedConsume.hint) {
+      setWorkflowStatus(expectedConsume.hint);
+    }
+    updateScrambleProgressText();
+    return;
+  }
+
+  if (expectedConsume.advanced) {
+    pendingDoubleMoveToken = null;
     scrambleStep += 1;
     if (scrambleStep >= scrambleMoves.length) {
       workflowPhase = WORKFLOW_PHASE.READY_INSPECTION;
       setWorkflowStatus("Scramble complete. Tap Start Inspection.");
       elements.startInspectionBtn.disabled = false;
     } else {
-      setWorkflowStatus(`Good. Next move: ${scrambleMoves[scrambleStep]}`);
+      setWorkflowStatus(`Good. Next move: ${describeExpectedMove(scrambleMoves[scrambleStep])}`);
     }
     updateScrambleProgressText();
     renderWorkflow();
     return;
   }
 
-  if (scrambleStep > 0 && move === inverseMoveToken(scrambleMoves[scrambleStep - 1])) {
+  pendingDoubleMoveToken = null;
+  if (
+    scrambleStep > 0 &&
+    move === inverseMoveToken(scrambleMoves[scrambleStep - 1])
+  ) {
     scrambleStep -= 1;
-    setWorkflowStatus(`Stepped back. Next move: ${scrambleMoves[scrambleStep]}`);
+    pendingDoubleMoveToken = null;
+    setWorkflowStatus(`Stepped back. Next move: ${describeExpectedMove(scrambleMoves[scrambleStep])}`);
     updateScrambleProgressText();
     return;
   }
 
   scrambleOffTrackMove = move;
   setWorkflowStatus(
-    `Misstep. Expected ${expectedMove}. Undo with ${inverseMoveToken(move)}.`,
+    `Misstep. Expected ${describeExpectedMove(expectedMove)}. Undo with ${inverseMoveToken(move)}.`,
   );
 }
 
@@ -613,7 +632,7 @@ function updateScrambleProgressText() {
     return;
   }
 
-  elements.scrambleProgress.textContent = `Progress: ${scrambleStep} / ${scrambleMoves.length} (next ${scrambleMoves[scrambleStep]})`;
+  elements.scrambleProgress.textContent = `Progress: ${scrambleStep} / ${scrambleMoves.length} (next ${describeExpectedMove(scrambleMoves[scrambleStep])})`;
 }
 
 function readScrambleMode() {
@@ -1048,6 +1067,57 @@ function inverseMoveToken(move) {
     return move.slice(0, -1);
   }
   return `${move}'`;
+}
+
+function consumeExpectedMove(expectedMove, observedMove) {
+  if (typeof expectedMove !== "string") {
+    return { handled: false, advanced: false, pending: null, hint: null };
+  }
+
+  if (observedMove === expectedMove) {
+    return { handled: true, advanced: true, pending: null, hint: null };
+  }
+
+  if (!expectedMove.endsWith("2")) {
+    return { handled: false, advanced: false, pending: null, hint: null };
+  }
+
+  const face = expectedMove[0];
+  const quarterClockwise = face;
+  const quarterCounterClockwise = `${face}'`;
+  const isQuarterTurn =
+    observedMove === quarterClockwise || observedMove === quarterCounterClockwise;
+
+  if (!isQuarterTurn) {
+    return { handled: false, advanced: false, pending: null, hint: null };
+  }
+
+  if (pendingDoubleMoveToken === expectedMove) {
+    return { handled: true, advanced: true, pending: null, hint: null };
+  }
+
+  return {
+    handled: true,
+    advanced: false,
+    pending: expectedMove,
+    hint: `Half turn detected for ${expectedMove}. Do one more ${quarterClockwise} or ${quarterCounterClockwise}.`,
+  };
+}
+
+function describeExpectedMove(move) {
+  if (typeof move !== "string" || !move) {
+    return "";
+  }
+
+  if (move.endsWith("2") && pendingDoubleMoveToken === move) {
+    return `${move} (one more quarter turn)`;
+  }
+
+  if (move.endsWith("2")) {
+    return `${move} (double turn)`;
+  }
+
+  return move;
 }
 
 function setUpdateStatus(message) {
