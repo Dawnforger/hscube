@@ -1,6 +1,6 @@
 # GAN Smartcube Lite
 
-Current app version: **1.3.4**
+Current app version: **1.3.5**
 
 Minimal open source replacement app for CubeStation focused on:
 

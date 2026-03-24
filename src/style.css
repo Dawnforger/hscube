@@ -235,78 +235,84 @@ button:disabled {
   padding: 0.8rem;
 }
 
-.cube-net-root {
+.cube3d-root {
   width: 100%;
   height: 100%;
-  overflow: auto;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
-.cube-net {
-  width: min(100%, 520px);
+.cube3d-scene {
+  width: min(100%, 420px);
+  height: 100%;
+  min-height: 190px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(56px, 1fr));
-  grid-template-rows: repeat(3, minmax(56px, 1fr));
-  grid-template-areas:
-    ". u . ."
-    "l f r b"
-    ". d . .";
-  gap: 0.5rem;
+  place-items: center;
+  perspective: 880px;
+  touch-action: none;
+  cursor: grab;
 }
 
-.cube-face {
-  border: 1px solid #394766;
-  border-radius: 10px;
-  padding: 0.34rem;
-  background: rgba(10, 15, 24, 0.72);
+.cube3d-scene.dragging {
+  cursor: grabbing;
 }
 
-.cube-face-u {
-  grid-area: u;
+.cube3d {
+  --cube-size: min(42vw, 180px);
+  width: var(--cube-size);
+  height: var(--cube-size);
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 40ms linear;
 }
 
-.cube-face-r {
-  grid-area: r;
-}
-
-.cube-face-f {
-  grid-area: f;
-}
-
-.cube-face-d {
-  grid-area: d;
-}
-
-.cube-face-l {
-  grid-area: l;
-}
-
-.cube-face-b {
-  grid-area: b;
-}
-
-.cube-face-label {
-  margin: 0 0 0.26rem;
-  font-size: 0.7rem;
-  color: #9db1d7;
-  font-weight: 700;
-  text-align: center;
-}
-
-.cube-face-grid {
+.cube3d-face {
+  position: absolute;
+  inset: 0;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 0.18rem;
+  gap: 0.15rem;
+  padding: 0.28rem;
+  border-radius: 10px;
+  background: #111720;
+  border: 1px solid rgba(170, 185, 215, 0.23);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
-.cube-sticker {
+.cube3d-face-f {
+  transform: translateZ(calc(var(--cube-size) / 2));
+}
+
+.cube3d-face-b {
+  transform: rotateY(180deg) translateZ(calc(var(--cube-size) / 2));
+}
+
+.cube3d-face-r {
+  transform: rotateY(90deg) translateZ(calc(var(--cube-size) / 2));
+}
+
+.cube3d-face-l {
+  transform: rotateY(-90deg) translateZ(calc(var(--cube-size) / 2));
+}
+
+.cube3d-face-u {
+  transform: rotateX(90deg) translateZ(calc(var(--cube-size) / 2));
+}
+
+.cube3d-face-d {
+  transform: rotateX(-90deg) translateZ(calc(var(--cube-size) / 2));
+}
+
+.cube3d-sticker {
   aspect-ratio: 1 / 1;
   border-radius: 4px;
   border: 1px solid rgba(0, 0, 0, 0.35);
   background: #3b414f;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 1px 2px rgba(0, 0, 0, 0.32);
 }
 
 #cube-sync-status {

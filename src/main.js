@@ -715,7 +715,7 @@ async function checkForUpdate({ userInitiated }) {
     if (comparison > 0) {
       if (isNativeRuntime() && latestReleasePageUrl) {
         setUpdateStatus(
-          `Update available: v${remoteVersion} (current v${APP_VERSION}). Open release page for reliable download.`,
+          `Update available: v${remoteVersion} (current v${APP_VERSION}). Open release page for reliable download. Android still requires install confirmation.`,
         );
         elements.downloadUpdateBtn.textContent = `Open v${remoteVersion} release`;
       } else {
@@ -764,7 +764,9 @@ function openLatestApk() {
   }
 
   if (useReleasePage) {
-    setUpdateStatus("Opened release page. Tap the APK asset to finish update download.");
+    setUpdateStatus(
+      "Opened release page. Tap APK to download; Android then requires install confirmation to update app code.",
+    );
   }
 }
 
