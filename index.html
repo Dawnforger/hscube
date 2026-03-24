@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GAN Smartcube Lite</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="drawer-backdrop" class="drawer-backdrop hidden"></div>
+    <aside id="side-drawer" class="side-drawer">
+      <p class="drawer-title">Navigation</p>
+      <button id="nav-solve-btn" class="drawer-link active">Solve</button>
+      <button id="nav-records-btn" class="drawer-link">Records</button>
+    </aside>
+
+    <main class="app">
+      <header class="app-header">
+        <div class="header-row">
+          <button id="menu-toggle-btn" class="menu-toggle">☰</button>
+          <div>
+            <h1>GAN Smartcube Lite</h1>
+            <p class="subtitle">Timer + GAN i3 Bluetooth + solve history</p>
+            <p class="meta-line">App version: <strong id="app-version">-</strong></p>
+          </div>
+        </div>
+      </header>
+
+      <section id="solve-screen" class="screen active">
+        <section class="card connection-card">
+          <h2>Bluetooth</h2>
+          <div class="connection-controls">
+            <button id="connect-btn">Connect Cube</button>
+            <button id="disconnect-btn" disabled>Disconnect</button>
+          </div>
+          <p id="connection-status">Not connected.</p>
+        </section>
+
+        <section class="card cube-card">
+          <div class="history-header">
+            <h2>Cube Sync</h2>
+            <button id="reset-cube-sync-btn">Reset Cube Data</button>
+          </div>
+          <p id="cube-sync-status">Waiting for cube state...</p>
+          <div id="cube-viewport" class="cube-viewport"></div>
+        </section>
+
+        <section class="card timer-card">
+          <h2>Timer</h2>
+          <p id="timer-display" class="timer-display">0.00</p>
+          <p id="inspection-display" class="inspection-display">Inspection: --</p>
+          <div class="timer-controls">
+            <button id="manual-toggle-btn">Start / Stop (Space)</button>
+            <button id="reset-btn">Reset</button>
+          </div>
+        </section>
+
+        <section class="card workflow-card">
+          <h2>Solve Workflow</h2>
+          <div class="workflow-grid">
+            <label class="field-label">
+              Scramble mode
+              <select id="scramble-mode-select">
+                <option value="free">Free scramble</option>
+                <option value="alg" selected>Algorithm scramble</option>
+              </select>
+            </label>
+            <label class="field-label">
+              Inspection seconds
+              <input id="inspection-seconds-input" type="number" min="0" max="30" step="1" value="15" />
+            </label>
+          </div>
+          <div class="workflow-controls">
+            <button id="prepare-solve-btn">Prepare Solve</button>
+            <button id="start-inspection-btn" disabled>Start Inspection</button>
+          </div>
+          <p id="workflow-status">No active solve cycle.</p>
+          <p id="scramble-display" class="mono-text">Scramble: -</p>
+          <p id="scramble-progress">Progress: 0 / 0</p>
+        </section>
+
+        <section class="card update-card">
+          <h2>Updates</h2>
+          <p id="update-status">Not checked yet.</p>
+          <div class="update-controls">
+            <button id="check-update-btn">Check for update</button>
+            <button id="download-update-btn" disabled>Open latest APK</button>
+          </div>
+        </section>
+      </section>
+
+      <section id="records-screen" class="screen">
+        <section class="card stats-card">
+          <h2>Stats</h2>
+          <p>Total solves: <strong id="total-solves">0</strong></p>
+          <p>Ao5 (last 5): <strong id="ao5-value">N/A</strong></p>
+        </section>
+
+        <section class="card history-card">
+          <div class="history-header">
+            <h2>Solve History</h2>
+            <button id="clear-solves-btn">Clear</button>
+          </div>
+          <ol id="solve-list"></ol>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
