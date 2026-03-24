@@ -65,6 +65,7 @@ let frameId = null;
 let sawUnsolvedDuringRun = false;
 let nativeBluetoothActive = false;
 let latestApkDownloadUrl = null;
+let latestReleasePageUrl = null;
 let currentCubeSolved = true;
 let currentFacelets = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
 let cubeRenderer = null;
@@ -661,6 +662,7 @@ function clearSolves() {
 async function checkForUpdate({ userInitiated }) {
   elements.checkUpdateBtn.disabled = true;
   latestApkDownloadUrl = null;
+  latestReleasePageUrl = null;
   elements.downloadUpdateBtn.disabled = true;
   elements.downloadUpdateBtn.textContent = "Open latest APK";
   setUpdateStatus("Checking for updates...");
@@ -695,17 +697,31 @@ async function checkForUpdate({ userInitiated }) {
     }
 
     latestApkDownloadUrl = apkAsset.browser_download_url;
+    latestReleasePageUrl =
+      typeof latestRelease.html_url === "string" ? latestRelease.html_url : null;
     const remoteVersion = parseVersion(latestRelease.tag_name) ?? parseVersion(apkAsset.name);
     if (!remoteVersion) {
-      setUpdateStatus(`Latest APK found: ${latestRelease.tag_name}`);
+      if (isNativeRuntime() && latestReleasePageUrl) {
+        setUpdateStatus(`Latest APK found: ${latestRelease.tag_name}. Open release page to download.`);
+        elements.downloadUpdateBtn.textContent = "Open latest release page";
+      } else {
+        setUpdateStatus(`Latest APK found: ${latestRelease.tag_name}`);
+      }
       elements.downloadUpdateBtn.disabled = false;
       return;
     }
 
     const comparison = compareSemver(remoteVersion, APP_VERSION);
     if (comparison > 0) {
-      setUpdateStatus(`Update available: v${remoteVersion} (current v${APP_VERSION}).`);
-      elements.downloadUpdateBtn.textContent = `Download v${remoteVersion}`;
+      if (isNativeRuntime() && latestReleasePageUrl) {
+        setUpdateStatus(
+          `Update available: v${remoteVersion} (current v${APP_VERSION}). Open release page for reliable download.`,
+        );
+        elements.downloadUpdateBtn.textContent = `Open v${remoteVersion} release`;
+      } else {
+        setUpdateStatus(`Update available: v${remoteVersion} (current v${APP_VERSION}).`);
+        elements.downloadUpdateBtn.textContent = `Download v${remoteVersion}`;
+      }
       elements.downloadUpdateBtn.disabled = false;
       return;
     }
@@ -713,7 +729,10 @@ async function checkForUpdate({ userInitiated }) {
     if (comparison === 0) {
       setUpdateStatus(`You are on the latest version (v${APP_VERSION}).`);
       if (userInitiated) {
-        elements.downloadUpdateBtn.textContent = "Reinstall current APK";
+        elements.downloadUpdateBtn.textContent =
+          isNativeRuntime() && latestReleasePageUrl
+            ? "Open current release page"
+            : "Reinstall current APK";
         elements.downloadUpdateBtn.disabled = false;
       }
       return;
@@ -733,7 +752,20 @@ function openLatestApk() {
     return;
   }
 
-  window.open(latestApkDownloadUrl, "_blank", "noopener,noreferrer");
+  const useReleasePage = isNativeRuntime() && Boolean(latestReleasePageUrl);
+  const targetUrl = useReleasePage ? latestReleasePageUrl : latestApkDownloadUrl;
+  if (!targetUrl) {
+    return;
+  }
+
+  const openedWindow = window.open(targetUrl, "_blank", "noopener");
+  if (!openedWindow) {
+    window.location.assign(targetUrl);
+  }
+
+  if (useReleasePage) {
+    setUpdateStatus("Opened release page. Tap the APK asset to finish update download.");
+  }
 }
 
 async function resetCubeData() {
@@ -1030,4 +1062,17 @@ function setWorkflowStatus(message) {
 
 function setCubeSyncStatus(message) {
   elements.cubeSyncStatus.textContent = message;
+}
+
+function isNativeRuntime() {
+  const cap = window.Capacitor;
+  if (!cap) {
+    return false;
+  }
+  if (typeof cap.isNativePlatform === "function") {
+    return cap.isNativePlatform();
+  }
+  const platform =
+    typeof cap.getPlatform === "function" ? cap.getPlatform() : String(cap.platform ?? "");
+  return platform === "android" || platform === "ios";
 }
