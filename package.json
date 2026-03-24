@@ -1,6 +1,6 @@
 {
   "name": "hs-cube",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Minimal GAN smartcube timer with solve history and Ao5",
   "private": true,
   "scripts": {
