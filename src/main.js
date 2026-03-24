@@ -77,6 +77,7 @@ let inspectionSeconds = 15;
 let scrambleMoves = [];
 let scrambleStep = 0;
 let pendingDoubleMoveToken = null;
+let pendingDoubleMoveDirection = null;
 let scrambleOffTrackMove = null;
 let inspectionEndPerfMs = 0;
 let inspectionFrameId = null;
@@ -312,6 +313,7 @@ async function prepareSolveCycle() {
   inspectionSeconds = readInspectionSeconds();
   scrambleStep = 0;
   pendingDoubleMoveToken = null;
+  pendingDoubleMoveDirection = null;
   scrambleOffTrackMove = null;
   sawUnsolvedDuringRun = false;
   const connected = Boolean(cubeConnection);
@@ -359,6 +361,7 @@ function handleAlgScrambleMove(moveToken) {
     if (move === undoMove) {
       scrambleOffTrackMove = null;
       pendingDoubleMoveToken = null;
+      pendingDoubleMoveDirection = null;
       const nextMove = describeExpectedMove(scrambleMoves[scrambleStep]);
       setWorkflowStatus(
         nextMove
@@ -376,6 +379,7 @@ function handleAlgScrambleMove(moveToken) {
   const expectedConsume = consumeExpectedMove(expectedMove, move);
   if (expectedConsume.handled && !expectedConsume.advanced) {
     pendingDoubleMoveToken = expectedConsume.pending;
+    pendingDoubleMoveDirection = expectedConsume.pendingDirection;
     if (expectedConsume.hint) {
       setWorkflowStatus(expectedConsume.hint);
     }
@@ -385,6 +389,7 @@ function handleAlgScrambleMove(moveToken) {
 
   if (expectedConsume.advanced) {
     pendingDoubleMoveToken = null;
+    pendingDoubleMoveDirection = null;
     scrambleStep += 1;
     if (scrambleStep >= scrambleMoves.length) {
       workflowPhase = WORKFLOW_PHASE.READY_INSPECTION;
@@ -399,12 +404,14 @@ function handleAlgScrambleMove(moveToken) {
   }
 
   pendingDoubleMoveToken = null;
+  pendingDoubleMoveDirection = null;
   if (
     scrambleStep > 0 &&
     move === inverseMoveToken(scrambleMoves[scrambleStep - 1])
   ) {
     scrambleStep -= 1;
     pendingDoubleMoveToken = null;
+    pendingDoubleMoveDirection = null;
     setWorkflowStatus(`Stepped back. Next move: ${describeExpectedMove(scrambleMoves[scrambleStep])}`);
     updateScrambleProgressText();
     return;
@@ -832,6 +839,8 @@ async function resetCubeData() {
     await cubeConnection.sendCubeCommand({ type: "REQUEST_RESET" });
     await cubeConnection.sendCubeCommand({ type: "REQUEST_FACELETS" });
     scrambleStep = 0;
+    pendingDoubleMoveToken = null;
+    pendingDoubleMoveDirection = null;
     scrambleOffTrackMove = null;
     if (scrambleMode === SCRAMBLE_MODE.ALG && scrambleMoves.length > 0) {
       updateScrambleProgressText();
@@ -1104,15 +1113,15 @@ function inverseMoveToken(move) {
 
 function consumeExpectedMove(expectedMove, observedMove) {
   if (typeof expectedMove !== "string") {
-    return { handled: false, advanced: false, pending: null, hint: null };
+    return { handled: false, advanced: false, pending: null, pendingDirection: null, hint: null };
   }
 
   if (observedMove === expectedMove) {
-    return { handled: true, advanced: true, pending: null, hint: null };
+    return { handled: true, advanced: true, pending: null, pendingDirection: null, hint: null };
   }
 
   if (!expectedMove.endsWith("2")) {
-    return { handled: false, advanced: false, pending: null, hint: null };
+    return { handled: false, advanced: false, pending: null, pendingDirection: null, hint: null };
   }
 
   const face = expectedMove[0];
@@ -1122,18 +1131,31 @@ function consumeExpectedMove(expectedMove, observedMove) {
     observedMove === quarterClockwise || observedMove === quarterCounterClockwise;
 
   if (!isQuarterTurn) {
-    return { handled: false, advanced: false, pending: null, hint: null };
+    return { handled: false, advanced: false, pending: null, pendingDirection: null, hint: null };
   }
 
   if (pendingDoubleMoveToken === expectedMove) {
-    return { handled: true, advanced: true, pending: null, hint: null };
+    if (observedMove === pendingDoubleMoveDirection) {
+      return { handled: true, advanced: true, pending: null, pendingDirection: null, hint: null };
+    }
+    if (observedMove === inverseMoveToken(pendingDoubleMoveDirection ?? "")) {
+      return {
+        handled: true,
+        advanced: false,
+        pending: null,
+        pendingDirection: null,
+        hint: `Half turn canceled for ${expectedMove}. Do ${expectedMove} (${quarterClockwise} ${quarterClockwise} or ${quarterCounterClockwise} ${quarterCounterClockwise}).`,
+      };
+    }
+    return { handled: false, advanced: false, pending: null, pendingDirection: null, hint: null };
   }
 
   return {
     handled: true,
     advanced: false,
     pending: expectedMove,
-    hint: `Half turn detected for ${expectedMove}. Do one more ${quarterClockwise} or ${quarterCounterClockwise}.`,
+    pendingDirection: observedMove,
+    hint: `Half turn detected for ${expectedMove}. Do one more ${observedMove}.`,
   };
 }
 
@@ -1143,7 +1165,7 @@ function describeExpectedMove(move) {
   }
 
   if (move.endsWith("2") && pendingDoubleMoveToken === move) {
-    return `${move} (one more quarter turn)`;
+    return `${move} (one more ${pendingDoubleMoveDirection ?? "quarter turn"})`;
   }
 
   if (move.endsWith("2")) {
