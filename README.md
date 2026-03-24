@@ -46,10 +46,12 @@ npm install
 npm run setup:android
 ```
 
-Point Gradle at your SDK (Android Studio default is `~/Android/Sdk`):
+Point Gradle at your SDK. The `apk:debug` script searches common install locations (including **Flatpak** and **Snap** Android Studio) and can **create** `android/local.properties` for you when it finds one.
 
-- Export `ANDROID_HOME="$HOME/Android/Sdk"`, **or**
-- Copy `android/local.properties.example` → `android/local.properties` and set `sdk.dir`.
+If it still fails, set the path explicitly:
+
+- `export ANDROID_HOME="$HOME/Android/Sdk"`, **or**
+- Copy `android/local.properties.example` → `android/local.properties` and set `sdk.dir` to a folder that contains `platforms/` or `build-tools/` (install those via Android Studio **SDK Manager** if missing).
 
 Then:
 
