@@ -70,7 +70,13 @@
               <input id="orientation-sync-checkbox" type="checkbox" />
               Cube orientation sync
             </label>
+            <div class="orientation-calibration-actions">
+              <button id="start-orientation-calibration-btn">Calibrate 6 Faces</button>
+              <button id="capture-orientation-calibration-btn" disabled>Capture Face Up</button>
+              <button id="reset-orientation-calibration-btn">Reset Calibration</button>
+            </div>
             <p id="orientation-sync-status" class="meta-line">Orientation sync: off</p>
+            <p id="orientation-calibration-status" class="meta-line">Calibration: not set</p>
           </div>
           <div id="cube-viewport" class="cube-viewport"></div>
         </section>

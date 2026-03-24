@@ -293,6 +293,18 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.orientation-calibration-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-top: 0.12rem;
+}
+
+#orientation-calibration-status {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
 .workflow-grid {
   display: grid;
   gap: 0.55rem;

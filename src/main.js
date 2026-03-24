@@ -11,11 +11,22 @@ const KNOWN_CUBES_KEY = "gan-smartcube-known-cubes-v1";
 const LAST_CUBE_KEY = "gan-smartcube-last-cube-v1";
 const AUTO_CONNECT_LAST_CUBE_KEY = "gan-smartcube-auto-connect-last-cube-v1";
 const ORIENTATION_SYNC_KEY = "hs-cube-orientation-sync-v1";
+const ORIENTATION_CALIBRATION_KEY = "hs-cube-orientation-calibration-v1";
 const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.0.0";
 const RELEASES_API_URL = "https://api.github.com/repos/Dawnforger/hscube/releases?per_page=20";
 const FACELET_POLL_THROTTLE_MS = 180;
 const SCRAMBLE_LENGTH = 20;
 const MAX_INSPECTION_SECONDS = 30;
+const CALIBRATION_FACE_SEQUENCE = ["U", "R", "F", "D", "L", "B"];
+const CALIBRATION_SAMPLE_COUNT = 20;
+const ORIENTATION_AXIS_REFERENCE = {
+  U: { x: 0, y: 0, z: 1 },
+  R: { x: 1, y: 0, z: 0 },
+  F: { x: 0, y: 1, z: 0 },
+  D: { x: 0, y: 0, z: -1 },
+  L: { x: -1, y: 0, z: 0 },
+  B: { x: 0, y: -1, z: 0 },
+};
 const WORKFLOW_PHASE = {
   IDLE: "idle",
   SCRAMBLING: "scrambling",
@@ -68,6 +79,10 @@ const elements = {
   rememberedCubesStatus: document.querySelector("#remembered-cubes-status"),
   orientationSyncCheckbox: document.querySelector("#orientation-sync-checkbox"),
   orientationSyncStatus: document.querySelector("#orientation-sync-status"),
+  startOrientationCalibrationBtn: document.querySelector("#start-orientation-calibration-btn"),
+  captureOrientationCalibrationBtn: document.querySelector("#capture-orientation-calibration-btn"),
+  resetOrientationCalibrationBtn: document.querySelector("#reset-orientation-calibration-btn"),
+  orientationCalibrationStatus: document.querySelector("#orientation-calibration-status"),
 };
 
 let cubeConnection = null;
@@ -91,6 +106,10 @@ let suppressDisconnectRemembering = false;
 let orientationSyncEnabled = false;
 let orientationSupportedByCube = null;
 let receivedOrientationSample = false;
+let latestGyroQuaternion = null;
+let recentGyroSamples = [];
+let orientationCalibrationCorrection = identityQuaternion();
+let orientationCalibrationSession = null;
 
 let workflowPhase = WORKFLOW_PHASE.IDLE;
 let scrambleMode = SCRAMBLE_MODE.ALG;
@@ -134,6 +153,9 @@ elements.downloadUpdateBtn.addEventListener("click", openLatestApk);
 elements.autoConnectCheckbox.addEventListener("change", onAutoConnectToggle);
 elements.forgetCubesBtn.addEventListener("click", forgetRememberedCubes);
 elements.orientationSyncCheckbox.addEventListener("change", onOrientationSyncToggle);
+elements.startOrientationCalibrationBtn.addEventListener("click", startOrientationCalibration);
+elements.captureOrientationCalibrationBtn.addEventListener("click", captureOrientationCalibrationFace);
+elements.resetOrientationCalibrationBtn.addEventListener("click", resetOrientationCalibration);
 
 document.addEventListener("keydown", (event) => {
   if (event.code !== "Space" || event.repeat) {
@@ -159,6 +181,7 @@ async function bootstrap() {
   switchScreen("solve");
   cubeRenderer = createCubeRenderer(elements.cubeViewport);
   cubeRenderer.updateFromFacelets(currentFacelets);
+  orientationCalibrationCorrection = loadOrientationCalibrationCorrection();
   applyOrientationSyncPreference(loadOrientationSyncPreference(), { persist: false });
   setCubeSyncStatus("Waiting for cube state...");
   renderTimer();
@@ -166,6 +189,7 @@ async function bootstrap() {
   renderSolves();
   renderRememberedCubesStatus();
   renderWorkflow();
+  updateOrientationCalibrationStatus();
   elements.appVersion.textContent = APP_VERSION;
   elements.autoConnectCheckbox.checked = loadAutoConnectPreference();
   setUpdateStatus("Not checked yet.");
@@ -251,11 +275,15 @@ async function connectToCube(options = {}) {
     sawUnsolvedDuringRun = false;
     orientationSupportedByCube = null;
     receivedOrientationSample = false;
+    latestGyroQuaternion = null;
+    recentGyroSamples = [];
+    orientationCalibrationSession = null;
     cubeRenderer?.resetOrientationSyncReference();
     rememberConnectedCube(connection);
     await connection.sendCubeCommand({ type: "REQUEST_FACELETS" });
     await connection.sendCubeCommand({ type: "REQUEST_HARDWARE" }).catch(() => undefined);
     updateOrientationSyncStatus();
+    updateOrientationCalibrationStatus();
   } catch (error) {
     if (usePreferredDevice) {
       clearNativePreferredDevice();
@@ -315,8 +343,12 @@ async function disconnectCube(options = {}) {
   }
   orientationSupportedByCube = null;
   receivedOrientationSample = false;
+  latestGyroQuaternion = null;
+  recentGyroSamples = [];
+  orientationCalibrationSession = null;
   cubeRenderer?.resetOrientationSyncReference();
   updateOrientationSyncStatus();
+  updateOrientationCalibrationStatus();
 
   elements.disconnectBtn.disabled = true;
   if (!preserveStatus) {
@@ -713,6 +745,73 @@ function onOrientationSyncToggle() {
   applyOrientationSyncPreference(elements.orientationSyncCheckbox.checked, {
     persist: true,
   });
+}
+
+function startOrientationCalibration() {
+  if (!cubeConnection) {
+    updateOrientationCalibrationStatus("Calibration requires a connected cube.");
+    return;
+  }
+  if (orientationSupportedByCube === false) {
+    updateOrientationCalibrationStatus("This cube does not expose orientation data.");
+    return;
+  }
+  orientationCalibrationSession = {
+    phase: "capturing",
+    index: 0,
+    samples: {},
+  };
+  updateOrientationCalibrationStatus();
+}
+
+function captureOrientationCalibrationFace() {
+  if (!orientationCalibrationSession || orientationCalibrationSession.phase !== "capturing") {
+    updateOrientationCalibrationStatus("Start calibration before capturing.");
+    return;
+  }
+  const targetFace = CALIBRATION_FACE_SEQUENCE[orientationCalibrationSession.index];
+  if (!targetFace) {
+    updateOrientationCalibrationStatus("Calibration is already complete.");
+    return;
+  }
+  const samples = sampleCurrentQuaternion(CALIBRATION_SAMPLE_COUNT);
+  if (!samples.length) {
+    updateOrientationCalibrationStatus("Waiting for stable gyro sample. Hold the cube still.");
+    return;
+  }
+  const averaged = averageQuaternions(samples);
+  if (!averaged) {
+    updateOrientationCalibrationStatus("Calibration capture failed. Try again.");
+    return;
+  }
+  orientationCalibrationSession.samples[targetFace] = averaged;
+  orientationCalibrationSession.index += 1;
+  if (orientationCalibrationSession.index >= CALIBRATION_FACE_SEQUENCE.length) {
+    const correction = solveCalibrationCorrection(orientationCalibrationSession.samples);
+    if (!correction) {
+      updateOrientationCalibrationStatus("Calibration solve failed. Restart calibration.");
+      return;
+    }
+    orientationCalibrationCorrection = correction;
+    persistOrientationCalibrationCorrection(orientationCalibrationCorrection);
+    orientationCalibrationSession = {
+      phase: "complete",
+      index: CALIBRATION_FACE_SEQUENCE.length,
+      samples: orientationCalibrationSession.samples,
+    };
+    cubeRenderer?.resetOrientationSyncReference();
+    updateOrientationCalibrationStatus("Calibration complete. Orientation sync now uses calibrated axes.");
+    return;
+  }
+  updateOrientationCalibrationStatus();
+}
+
+function resetOrientationCalibration() {
+  orientationCalibrationSession = null;
+  orientationCalibrationCorrection = identityQuaternion();
+  clearOrientationCalibrationCorrection();
+  cubeRenderer?.resetOrientationSyncReference();
+  updateOrientationCalibrationStatus("Calibration reset. Using default orientation mapping.");
 }
 
 function forgetRememberedCubes() {
@@ -1318,13 +1417,23 @@ function onHardwareEvent(event) {
     orientationSupportedByCube = true;
   }
   updateOrientationSyncStatus();
+  updateOrientationCalibrationStatus();
 }
 
 function onGyroEvent(event) {
+  latestGyroQuaternion = normalizeQuaternion(event?.quaternion);
+  if (!latestGyroQuaternion) {
+    return;
+  }
+  recentGyroSamples.push(latestGyroQuaternion);
+  if (recentGyroSamples.length > 240) {
+    recentGyroSamples.splice(0, recentGyroSamples.length - 240);
+  }
   if (!orientationSyncEnabled) {
     return;
   }
-  const applied = cubeRenderer?.syncOrientationToQuaternion(event?.quaternion);
+  const corrected = applyCalibrationToQuaternion(latestGyroQuaternion);
+  const applied = cubeRenderer?.syncOrientationToQuaternion(corrected);
   if (applied) {
     receivedOrientationSample = true;
     updateOrientationSyncStatus();
@@ -1366,6 +1475,50 @@ function updateOrientationSyncStatus() {
   elements.orientationSyncStatus.textContent = "Orientation sync: active";
 }
 
+function updateOrientationCalibrationStatus(messageOverride = null) {
+  if (messageOverride) {
+    elements.orientationCalibrationStatus.textContent = messageOverride;
+    renderCalibrationButtons();
+    return;
+  }
+  if (!cubeConnection) {
+    elements.orientationCalibrationStatus.textContent =
+      "Calibration: connect cube, then place each face up in sequence U, R, F, D, L, B.";
+    renderCalibrationButtons();
+    return;
+  }
+  if (orientationSupportedByCube === false) {
+    elements.orientationCalibrationStatus.textContent =
+      "Calibration unavailable: cube does not report orientation data.";
+    renderCalibrationButtons();
+    return;
+  }
+  if (orientationCalibrationSession?.phase === "capturing") {
+    const face = CALIBRATION_FACE_SEQUENCE[orientationCalibrationSession.index] ?? "";
+    elements.orientationCalibrationStatus.textContent =
+      `Calibration step ${orientationCalibrationSession.index + 1}/${CALIBRATION_FACE_SEQUENCE.length}: place ${face} face up, keep still, then tap Capture.`;
+    renderCalibrationButtons();
+    return;
+  }
+  if (hasNonIdentityCalibration()) {
+    elements.orientationCalibrationStatus.textContent =
+      "Calibration saved. Orientation sync uses calibrated correction.";
+    renderCalibrationButtons();
+    return;
+  }
+  elements.orientationCalibrationStatus.textContent =
+    "No calibration saved. Default orientation mapping is active.";
+  renderCalibrationButtons();
+}
+
+function renderCalibrationButtons() {
+  const capturing = orientationCalibrationSession?.phase === "capturing";
+  const canCalibrate = Boolean(cubeConnection) && orientationSupportedByCube !== false;
+  elements.startOrientationCalibrationBtn.disabled = !canCalibrate || capturing;
+  elements.captureOrientationCalibrationBtn.disabled = !canCalibrate || !capturing;
+  elements.resetOrientationCalibrationBtn.disabled = !hasNonIdentityCalibration() && !capturing;
+}
+
 function renderRememberedCubesStatus() {
   const lastCube = getLastCube();
   if (!knownCubes.length || !lastCube) {
@@ -1390,6 +1543,367 @@ function persistOrientationSyncPreference(enabled) {
 
 function loadOrientationSyncPreference() {
   return window.localStorage.getItem(ORIENTATION_SYNC_KEY) === "1";
+}
+
+function persistOrientationCalibrationCorrection(quaternion) {
+  const normalized = normalizeQuaternion(quaternion);
+  if (!normalized) {
+    return;
+  }
+  window.localStorage.setItem(ORIENTATION_CALIBRATION_KEY, JSON.stringify(normalized));
+}
+
+function clearOrientationCalibrationCorrection() {
+  window.localStorage.removeItem(ORIENTATION_CALIBRATION_KEY);
+}
+
+function loadOrientationCalibrationCorrection() {
+  const raw = window.localStorage.getItem(ORIENTATION_CALIBRATION_KEY);
+  if (!raw) {
+    return identityQuaternion();
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return normalizeQuaternion(parsed) ?? identityQuaternion();
+  } catch {
+    return identityQuaternion();
+  }
+}
+
+function hasNonIdentityCalibration() {
+  return !quaternionApproxEquals(orientationCalibrationCorrection, identityQuaternion(), 0.0015);
+}
+
+function sampleCurrentQuaternion(count) {
+  if (recentGyroSamples.length < count) {
+    return [];
+  }
+  return recentGyroSamples.slice(-count);
+}
+
+function invertQuaternion(quaternion) {
+  const normalized = normalizeQuaternion(quaternion);
+  if (!normalized) {
+    return identityQuaternion();
+  }
+  return {
+    x: -normalized.x,
+    y: -normalized.y,
+    z: -normalized.z,
+    w: normalized.w,
+  };
+}
+
+function averageQuaternions(samples) {
+  if (!Array.isArray(samples) || !samples.length) {
+    return null;
+  }
+  const first = normalizeQuaternion(samples[0]);
+  if (!first) {
+    return null;
+  }
+  let sx = 0;
+  let sy = 0;
+  let sz = 0;
+  let sw = 0;
+  for (const sample of samples) {
+    const q = normalizeQuaternion(sample);
+    if (!q) {
+      continue;
+    }
+    const dot = first.x * q.x + first.y * q.y + first.z * q.z + first.w * q.w;
+    const sign = dot < 0 ? -1 : 1;
+    sx += q.x * sign;
+    sy += q.y * sign;
+    sz += q.z * sign;
+    sw += q.w * sign;
+  }
+  return normalizeQuaternion({
+    x: sx,
+    y: sy,
+    z: sz,
+    w: sw,
+  });
+}
+
+function solveCalibrationCorrection(samplesByFace) {
+  const worldUp = { x: 0, y: 0, z: 1 };
+  const correctionCandidates = [];
+  const orientationChecks = [];
+  for (const face of CALIBRATION_FACE_SEQUENCE) {
+    const sample = normalizeQuaternion(samplesByFace[face]);
+    if (!sample) {
+      return null;
+    }
+    const faceAxis = ORIENTATION_AXIS_REFERENCE[face];
+    const observedFaceUp = rotateVectorByQuaternion(faceAxis, sample);
+    const correctionForFace = computeQuaternionFromVectors(observedFaceUp, worldUp);
+    if (!correctionForFace) {
+      return null;
+    }
+    correctionCandidates.push(correctionForFace);
+
+    const observedWorldAxis = rotateVectorByQuaternion(worldUp, sample);
+    if (!observedWorldAxis) {
+      return null;
+    }
+    orientationChecks.push({ sample, faceAxis, observedWorldAxis });
+  }
+  const correction = averageQuaternions(correctionCandidates);
+  if (!correction) {
+    return null;
+  }
+
+  // Validate using both calibration constraints:
+  // 1) selected face maps to world up after correction
+  // 2) world-up expressed in cube coordinates maps to the expected face axis
+  for (const check of orientationChecks) {
+    const alignedFaceUp = rotateVectorByQuaternion(check.observedFaceUp, correction);
+    if (!alignedFaceUp || dotVector3(alignedFaceUp, worldUp) < 0.92) {
+      return null;
+    }
+    const correctedSample = multiplyQuaternions(correction, check.sample);
+    const reconstructedAxis = rotateVectorByQuaternion(worldUp, correctedSample);
+    if (!reconstructedAxis || dotVector3(reconstructedAxis, check.faceAxis) < 0.92) {
+      return null;
+    }
+  }
+
+  return correction;
+}
+
+function applyCalibrationToQuaternion(quaternion) {
+  const normalized = normalizeQuaternion(quaternion);
+  if (!normalized) {
+    return null;
+  }
+  return multiplyQuaternions(orientationCalibrationCorrection, normalized);
+}
+
+function identityQuaternion() {
+  return { x: 0, y: 0, z: 0, w: 1 };
+}
+
+function quaternionApproxEquals(a, b, epsilon = 0.001) {
+  const qa = normalizeQuaternion(a);
+  const qb = normalizeQuaternion(b);
+  if (!qa || !qb) {
+    return false;
+  }
+  const dot = Math.abs(qa.x * qb.x + qa.y * qb.y + qa.z * qb.z + qa.w * qb.w);
+  return Math.abs(1 - dot) <= epsilon;
+}
+
+function normalizeQuaternion(quaternion) {
+  if (!quaternion || typeof quaternion !== "object") {
+    return null;
+  }
+  const x = Number(quaternion.x);
+  const y = Number(quaternion.y);
+  const z = Number(quaternion.z);
+  const w = Number(quaternion.w);
+  if (![x, y, z, w].every((value) => Number.isFinite(value))) {
+    return null;
+  }
+  const magnitude = Math.hypot(x, y, z, w);
+  if (magnitude < 1e-8) {
+    return null;
+  }
+  return {
+    x: x / magnitude,
+    y: y / magnitude,
+    z: z / magnitude,
+    w: w / magnitude,
+  };
+}
+
+function multiplyQuaternions(left, right) {
+  const a = normalizeQuaternion(left);
+  const b = normalizeQuaternion(right);
+  if (!a || !b) {
+    return identityQuaternion();
+  }
+  return normalizeQuaternion({
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+  });
+}
+
+function rotateVectorByQuaternion(vector, quaternion) {
+  const q = normalizeQuaternion(quaternion);
+  if (!q) {
+    return null;
+  }
+  const p = { x: vector.x, y: vector.y, z: vector.z, w: 0 };
+  const qInv = { x: -q.x, y: -q.y, z: -q.z, w: q.w };
+  const rotated = multiplyQuaternions(multiplyQuaternions(q, p), qInv);
+  return normalizeVector3(rotated);
+}
+
+function normalizeVector3(vector) {
+  if (!vector) {
+    return null;
+  }
+  const x = Number(vector.x);
+  const y = Number(vector.y);
+  const z = Number(vector.z);
+  if (![x, y, z].every((value) => Number.isFinite(value))) {
+    return null;
+  }
+  const magnitude = Math.hypot(x, y, z);
+  if (magnitude < 1e-8) {
+    return null;
+  }
+  return { x: x / magnitude, y: y / magnitude, z: z / magnitude };
+}
+
+function crossVector3(a, b) {
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  };
+}
+
+function dotVector3(a, b) {
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+function computeQuaternionFromVectors(fromVector, toVector) {
+  const from = normalizeVector3(fromVector);
+  const to = normalizeVector3(toVector);
+  if (!from || !to) {
+    return null;
+  }
+  const dot = dotVector3(from, to);
+  if (dot > 0.999999) {
+    return identityQuaternion();
+  }
+  if (dot < -0.999999) {
+    // Vectors are opposite; pick an orthogonal axis.
+    const referenceAxis =
+      Math.abs(from.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+    const axis = normalizeVector3(crossVector3(from, referenceAxis));
+    if (!axis) {
+      return null;
+    }
+    return normalizeQuaternion({
+      x: axis.x,
+      y: axis.y,
+      z: axis.z,
+      w: 0,
+    });
+  }
+  const axis = crossVector3(from, to);
+  return normalizeQuaternion({
+    x: axis.x,
+    y: axis.y,
+    z: axis.z,
+    w: 1 + dot,
+  });
+}
+
+function orthonormalBasis(xAxis, yHint) {
+  const x = normalizeVector3(xAxis);
+  if (!x) {
+    return null;
+  }
+  const yProjected = {
+    x: yHint.x - dotVector3(yHint, x) * x.x,
+    y: yHint.y - dotVector3(yHint, x) * x.y,
+    z: yHint.z - dotVector3(yHint, x) * x.z,
+  };
+  const y = normalizeVector3(yProjected);
+  if (!y) {
+    return null;
+  }
+  const z = normalizeVector3(crossVector3(x, y));
+  if (!z) {
+    return null;
+  }
+  return { x, y, z };
+}
+
+function matrixFromBasis(basis) {
+  return [
+    [basis.x.x, basis.y.x, basis.z.x],
+    [basis.x.y, basis.y.y, basis.z.y],
+    [basis.x.z, basis.y.z, basis.z.z],
+  ];
+}
+
+function transposeMatrix3(m) {
+  return [
+    [m[0][0], m[1][0], m[2][0]],
+    [m[0][1], m[1][1], m[2][1]],
+    [m[0][2], m[1][2], m[2][2]],
+  ];
+}
+
+function multiplyMatrix3(a, b) {
+  const out = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+  for (let row = 0; row < 3; row += 1) {
+    for (let col = 0; col < 3; col += 1) {
+      out[row][col] =
+        a[row][0] * b[0][col] +
+        a[row][1] * b[1][col] +
+        a[row][2] * b[2][col];
+    }
+  }
+  return out;
+}
+
+function quaternionFromRotationMatrix(matrix) {
+  const m00 = matrix[0][0];
+  const m01 = matrix[0][1];
+  const m02 = matrix[0][2];
+  const m10 = matrix[1][0];
+  const m11 = matrix[1][1];
+  const m12 = matrix[1][2];
+  const m20 = matrix[2][0];
+  const m21 = matrix[2][1];
+  const m22 = matrix[2][2];
+  const trace = m00 + m11 + m22;
+  if (trace > 0) {
+    const s = Math.sqrt(trace + 1) * 2;
+    return {
+      w: 0.25 * s,
+      x: (m21 - m12) / s,
+      y: (m02 - m20) / s,
+      z: (m10 - m01) / s,
+    };
+  }
+  if (m00 > m11 && m00 > m22) {
+    const s = Math.sqrt(1 + m00 - m11 - m22) * 2;
+    return {
+      w: (m21 - m12) / s,
+      x: 0.25 * s,
+      y: (m01 + m10) / s,
+      z: (m02 + m20) / s,
+    };
+  }
+  if (m11 > m22) {
+    const s = Math.sqrt(1 + m11 - m00 - m22) * 2;
+    return {
+      w: (m02 - m20) / s,
+      x: (m01 + m10) / s,
+      y: 0.25 * s,
+      z: (m12 + m21) / s,
+    };
+  }
+  const s = Math.sqrt(1 + m22 - m00 - m11) * 2;
+  return {
+    w: (m10 - m01) / s,
+    x: (m02 + m20) / s,
+    y: (m12 + m21) / s,
+    z: 0.25 * s,
+  };
 }
 
 function rememberConnectedCube(connection) {
