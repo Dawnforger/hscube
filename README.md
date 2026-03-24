@@ -1,6 +1,6 @@
 # HS Cube
 
-Current app version: **1.4.5**
+Current app version: **1.4.10**
 
 Minimal open source replacement app for CubeStation focused on:
 
