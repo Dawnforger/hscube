@@ -301,11 +301,6 @@ function scheduleFaceletPoll() {
 }
 
 async function prepareSolveCycle() {
-  if (!cubeConnection) {
-    setWorkflowStatus("Connect cube first.");
-    return;
-  }
-
   stopInspection({ resetDisplay: true });
   if (timerRunning) {
     stopTimer({ saveSolve: false, source: "manual" });
@@ -319,24 +314,29 @@ async function prepareSolveCycle() {
   pendingDoubleMoveToken = null;
   scrambleOffTrackMove = null;
   sawUnsolvedDuringRun = false;
+  const connected = Boolean(cubeConnection);
 
   if (scrambleMode === SCRAMBLE_MODE.FREE) {
     workflowPhase = WORKFLOW_PHASE.SCRAMBLING;
     scrambleMoves = [];
-    elements.scrambleDisplay.textContent = "Scramble: Free mode";
-    elements.scrambleProgress.textContent = "Progress: free scramble";
+    updateScrambleProgressText();
     setWorkflowStatus("Scramble freely, then tap Start Inspection.");
     elements.startInspectionBtn.disabled = false;
   } else {
-    workflowPhase = WORKFLOW_PHASE.SCRAMBLING;
+    workflowPhase = connected ? WORKFLOW_PHASE.SCRAMBLING : WORKFLOW_PHASE.READY_INSPECTION;
     scrambleMoves = generateScramble(SCRAMBLE_LENGTH);
-    elements.scrambleDisplay.textContent = `Scramble: ${scrambleMoves.join(" ")}`;
-    elements.startInspectionBtn.disabled = true;
+    elements.startInspectionBtn.disabled = connected;
     updateScrambleProgressText();
-    setWorkflowStatus(`Apply scramble. Next move: ${scrambleMoves[0]}`);
+    setWorkflowStatus(
+      connected
+        ? `Apply scramble. Next move: ${describeExpectedMove(scrambleMoves[0])}`
+        : "Algorithm generated. Apply scramble manually, then tap Start Inspection.",
+    );
   }
 
-  await cubeConnection.sendCubeCommand({ type: "REQUEST_FACELETS" }).catch(() => undefined);
+  if (connected) {
+    await cubeConnection.sendCubeCommand({ type: "REQUEST_FACELETS" }).catch(() => undefined);
+  }
   renderWorkflow();
 }
 
@@ -622,6 +622,8 @@ function renderInspection() {
 }
 
 function updateScrambleProgressText() {
+  renderScrambleDisplay();
+
   if (!scrambleMoves.length) {
     elements.scrambleProgress.textContent = "Progress: free scramble";
     return;
@@ -633,6 +635,37 @@ function updateScrambleProgressText() {
   }
 
   elements.scrambleProgress.textContent = `Progress: ${scrambleStep} / ${scrambleMoves.length} (next ${describeExpectedMove(scrambleMoves[scrambleStep])})`;
+}
+
+function renderScrambleDisplay() {
+  if (!scrambleMoves.length) {
+    elements.scrambleDisplay.textContent = "Scramble: Free mode";
+    return;
+  }
+
+  const label = document.createElement("span");
+  label.textContent = "Scramble:";
+  const sequence = document.createElement("span");
+  sequence.className = "scramble-sequence";
+
+  for (let index = 0; index < scrambleMoves.length; index += 1) {
+    const chip = document.createElement("span");
+    chip.className = "scramble-chip";
+
+    if (index < scrambleStep) {
+      chip.classList.add("done");
+    } else if (index === scrambleStep) {
+      chip.classList.add("active");
+      if (pendingDoubleMoveToken === scrambleMoves[index]) {
+        chip.classList.add("half");
+      }
+    }
+
+    chip.textContent = scrambleMoves[index];
+    sequence.append(chip);
+  }
+
+  elements.scrambleDisplay.replaceChildren(label, sequence);
 }
 
 function readScrambleMode() {

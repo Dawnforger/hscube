@@ -258,6 +258,50 @@ button:disabled {
   color: #c7cfde;
 }
 
+#scramble-display {
+  display: flex;
+  gap: 0.35rem;
+  align-items: flex-start;
+}
+
+.scramble-sequence {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.26rem;
+}
+
+.scramble-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.95rem;
+  padding: 0.08rem 0.34rem;
+  border-radius: 6px;
+  border: 1px solid #405172;
+  background: #243047;
+  color: #dbe5fa;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.scramble-chip.done {
+  background: #183a2e;
+  border-color: #2c6d55;
+  color: #8ee7bc;
+}
+
+.scramble-chip.active {
+  background: #355189;
+  border-color: #83a3e6;
+  color: #f3f7ff;
+}
+
+.scramble-chip.active.half {
+  background: #5a3f18;
+  border-color: #cda05c;
+  color: #ffe3b0;
+}
+
 .cube-viewport {
   width: 100%;
   aspect-ratio: 1.5 / 1;
