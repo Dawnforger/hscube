@@ -10,6 +10,7 @@ const STORAGE_KEY = "hs-cube-solves-v1";
 const KNOWN_CUBES_KEY = "gan-smartcube-known-cubes-v1";
 const LAST_CUBE_KEY = "gan-smartcube-last-cube-v1";
 const AUTO_CONNECT_LAST_CUBE_KEY = "gan-smartcube-auto-connect-last-cube-v1";
+const ORIENTATION_SYNC_KEY = "hs-cube-orientation-sync-v1";
 const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.0.0";
 const RELEASES_API_URL = "https://api.github.com/repos/Dawnforger/hscube/releases?per_page=20";
 const FACELET_POLL_THROTTLE_MS = 180;
@@ -65,6 +66,8 @@ const elements = {
   autoConnectCheckbox: document.querySelector("#auto-connect-checkbox"),
   forgetCubesBtn: document.querySelector("#forget-cubes-btn"),
   rememberedCubesStatus: document.querySelector("#remembered-cubes-status"),
+  orientationSyncCheckbox: document.querySelector("#orientation-sync-checkbox"),
+  orientationSyncStatus: document.querySelector("#orientation-sync-status"),
 };
 
 let cubeConnection = null;
@@ -85,6 +88,9 @@ let activeScreen = "solve";
 let autoConnectAttempted = false;
 let autoConnectInProgress = false;
 let suppressDisconnectRemembering = false;
+let orientationSyncEnabled = false;
+let orientationSupportedByCube = null;
+let receivedOrientationSample = false;
 
 let workflowPhase = WORKFLOW_PHASE.IDLE;
 let scrambleMode = SCRAMBLE_MODE.ALG;
@@ -127,6 +133,7 @@ elements.checkUpdateBtn.addEventListener("click", () => {
 elements.downloadUpdateBtn.addEventListener("click", openLatestApk);
 elements.autoConnectCheckbox.addEventListener("change", onAutoConnectToggle);
 elements.forgetCubesBtn.addEventListener("click", forgetRememberedCubes);
+elements.orientationSyncCheckbox.addEventListener("change", onOrientationSyncToggle);
 
 document.addEventListener("keydown", (event) => {
   if (event.code !== "Space" || event.repeat) {
@@ -152,6 +159,7 @@ async function bootstrap() {
   switchScreen("solve");
   cubeRenderer = createCubeRenderer(elements.cubeViewport);
   cubeRenderer.updateFromFacelets(currentFacelets);
+  applyOrientationSyncPreference(loadOrientationSyncPreference(), { persist: false });
   setCubeSyncStatus("Waiting for cube state...");
   renderTimer();
   renderInspection();
@@ -241,8 +249,13 @@ async function connectToCube(options = {}) {
     elements.disconnectBtn.disabled = false;
     currentCubeSolved = true;
     sawUnsolvedDuringRun = false;
+    orientationSupportedByCube = null;
+    receivedOrientationSample = false;
+    cubeRenderer?.resetOrientationSyncReference();
     rememberConnectedCube(connection);
     await connection.sendCubeCommand({ type: "REQUEST_FACELETS" });
+    await connection.sendCubeCommand({ type: "REQUEST_HARDWARE" }).catch(() => undefined);
+    updateOrientationSyncStatus();
   } catch (error) {
     if (usePreferredDevice) {
       clearNativePreferredDevice();
@@ -300,6 +313,10 @@ async function disconnectCube(options = {}) {
     forgetLastCube();
     clearNativePreferredDevice();
   }
+  orientationSupportedByCube = null;
+  receivedOrientationSample = false;
+  cubeRenderer?.resetOrientationSyncReference();
+  updateOrientationSyncStatus();
 
   elements.disconnectBtn.disabled = true;
   if (!preserveStatus) {
@@ -322,6 +339,16 @@ async function onGanCubeEvent(event) {
   if (event.type === "MOVE") {
     handleAlgScrambleMove(event.move);
     scheduleFaceletPoll();
+    return;
+  }
+
+  if (event.type === "HARDWARE") {
+    onHardwareEvent(event);
+    return;
+  }
+
+  if (event.type === "GYRO") {
+    onGyroEvent(event);
     return;
   }
 
@@ -682,6 +709,12 @@ function onAutoConnectToggle() {
   setBluetoothStatus("Auto-connect disabled.");
 }
 
+function onOrientationSyncToggle() {
+  applyOrientationSyncPreference(elements.orientationSyncCheckbox.checked, {
+    persist: true,
+  });
+}
+
 function forgetRememberedCubes() {
   knownCubes.length = 0;
   saveKnownCubes(knownCubes);
@@ -706,10 +739,6 @@ function closeDrawer() {
   elements.sideDrawer.classList.remove("open");
   elements.drawerBackdrop.classList.add("hidden");
 }
-
-window.addEventListener("beforeunload", () => {
-  cubeRenderer?.destroy();
-});
 
 function renderTimer() {
   elements.timerDisplay.textContent = formatTime(elapsedMs);
@@ -1282,6 +1311,61 @@ function setCubeSyncStatus(message) {
   elements.cubeSyncStatus.textContent = message;
 }
 
+function onHardwareEvent(event) {
+  if (typeof event?.gyroSupported === "boolean") {
+    orientationSupportedByCube = event.gyroSupported;
+  } else if (orientationSupportedByCube === null) {
+    orientationSupportedByCube = true;
+  }
+  updateOrientationSyncStatus();
+}
+
+function onGyroEvent(event) {
+  if (!orientationSyncEnabled) {
+    return;
+  }
+  const applied = cubeRenderer?.syncOrientationToQuaternion(event?.quaternion);
+  if (applied) {
+    receivedOrientationSample = true;
+    updateOrientationSyncStatus();
+  }
+}
+
+function applyOrientationSyncPreference(enabled, options = {}) {
+  const { persist = true } = options;
+  orientationSyncEnabled = Boolean(enabled);
+  receivedOrientationSample = false;
+  cubeRenderer?.setOrientationSyncEnabled(orientationSyncEnabled);
+  elements.orientationSyncCheckbox.checked = orientationSyncEnabled;
+  if (persist) {
+    persistOrientationSyncPreference(orientationSyncEnabled);
+  }
+  updateOrientationSyncStatus();
+}
+
+function updateOrientationSyncStatus() {
+  if (!orientationSyncEnabled) {
+    elements.orientationSyncStatus.textContent = "Orientation sync: off";
+    return;
+  }
+  if (!cubeConnection) {
+    elements.orientationSyncStatus.textContent =
+      "Orientation sync: waiting for cube connection";
+    return;
+  }
+  if (orientationSupportedByCube === false) {
+    elements.orientationSyncStatus.textContent =
+      "Orientation sync: this cube does not report orientation";
+    return;
+  }
+  if (!receivedOrientationSample) {
+    elements.orientationSyncStatus.textContent =
+      "Orientation sync: waiting for accelerometer data";
+    return;
+  }
+  elements.orientationSyncStatus.textContent = "Orientation sync: active";
+}
+
 function renderRememberedCubesStatus() {
   const lastCube = getLastCube();
   if (!knownCubes.length || !lastCube) {
@@ -1298,6 +1382,14 @@ function updateAutoConnectPreference(enabled) {
 
 function loadAutoConnectPreference() {
   return window.localStorage.getItem(AUTO_CONNECT_LAST_CUBE_KEY) !== "0";
+}
+
+function persistOrientationSyncPreference(enabled) {
+  window.localStorage.setItem(ORIENTATION_SYNC_KEY, enabled ? "1" : "0");
+}
+
+function loadOrientationSyncPreference() {
+  return window.localStorage.getItem(ORIENTATION_SYNC_KEY) === "1";
 }
 
 function rememberConnectedCube(connection) {

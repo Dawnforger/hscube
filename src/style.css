@@ -282,6 +282,17 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.orientation-sync-row {
+  margin-top: 0.45rem;
+  display: grid;
+  gap: 0.18rem;
+}
+
+#orientation-sync-status {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
 .workflow-grid {
   display: grid;
   gap: 0.55rem;
@@ -402,6 +413,10 @@ button:disabled {
 
 .cube3d-scene.dragging {
   cursor: grabbing;
+}
+
+.cube3d-scene.sync-enabled {
+  cursor: default;
 }
 
 .cube3d {

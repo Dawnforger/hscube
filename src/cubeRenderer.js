@@ -11,6 +11,7 @@ const FACE_ORDER = ["U", "R", "F", "D", "L", "B"];
 const SOLVED_FACELETS = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
 const ROTATE_SPEED = 0.34;
 const MAX_TILT = 78;
+const EPSILON = 1e-8;
 
 export function createCubeRenderer(container) {
   const root = document.createElement("div");
@@ -48,10 +49,16 @@ export function createCubeRenderer(container) {
   let pointerId = null;
   let lastX = 0;
   let lastY = 0;
+  let orientationSyncEnabled = false;
+  let referenceSensorQuaternion = null;
+  let referenceRenderQuaternion = null;
 
   renderRotation();
 
   const onPointerDown = (event) => {
+    if (orientationSyncEnabled) {
+      return;
+    }
     if (event.pointerType === "mouse" && event.button !== 0) {
       return;
     }
@@ -63,6 +70,9 @@ export function createCubeRenderer(container) {
   };
 
   const onPointerMove = (event) => {
+    if (orientationSyncEnabled) {
+      return;
+    }
     if (pointerId !== event.pointerId) {
       return;
     }
@@ -78,6 +88,9 @@ export function createCubeRenderer(container) {
   };
 
   const endDrag = (event) => {
+    if (orientationSyncEnabled) {
+      return;
+    }
     if (pointerId !== event.pointerId) {
       return;
     }
@@ -102,6 +115,54 @@ export function createCubeRenderer(container) {
     updateFromFacelets(facelets) {
       applyFacelets(stickers, facelets);
     },
+    setOrientationSyncEnabled(enabled) {
+      const nextEnabled = Boolean(enabled);
+      if (orientationSyncEnabled === nextEnabled) {
+        return;
+      }
+      if (nextEnabled && pointerId !== null) {
+        try {
+          scene.releasePointerCapture(pointerId);
+        } catch {
+          // Pointer may already be released; ignore.
+        }
+        pointerId = null;
+        scene.classList.remove("dragging");
+      }
+      orientationSyncEnabled = nextEnabled;
+      referenceSensorQuaternion = null;
+      referenceRenderQuaternion = null;
+      scene.classList.toggle("sync-enabled", orientationSyncEnabled);
+      if (!orientationSyncEnabled) {
+        renderRotation();
+      }
+    },
+    resetOrientationSyncReference() {
+      referenceSensorQuaternion = null;
+      referenceRenderQuaternion = null;
+    },
+    syncOrientationToQuaternion(quaternion) {
+      if (!orientationSyncEnabled) {
+        return false;
+      }
+      const normalized = normalizeQuaternion(quaternion);
+      if (!normalized) {
+        return false;
+      }
+
+      if (!referenceSensorQuaternion) {
+        referenceSensorQuaternion = normalized;
+        referenceRenderQuaternion = eulerToQuaternion(rotX, rotY);
+      }
+
+      const sensorDelta = multiplyQuaternions(
+        normalized,
+        invertQuaternion(referenceSensorQuaternion),
+      );
+      const target = multiplyQuaternions(sensorDelta, referenceRenderQuaternion);
+      renderQuaternion(target);
+      return true;
+    },
     destroy() {
       scene.removeEventListener("pointerdown", onPointerDown);
       scene.removeEventListener("pointermove", onPointerMove);
@@ -119,6 +180,24 @@ export function createCubeRenderer(container) {
     cube.style.transform = `rotateX(${rotX}deg) rotateY(${rotY}deg)`;
   }
 
+  function renderQuaternion(quaternion) {
+    const normalized = normalizeQuaternion(quaternion);
+    if (!normalized) {
+      return;
+    }
+    const clampedW = Math.max(-1, Math.min(1, normalized.w));
+    const angle = 2 * Math.acos(clampedW);
+    const axisFactor = Math.sqrt(Math.max(0, 1 - clampedW * clampedW));
+    if (axisFactor < EPSILON) {
+      cube.style.transform = "rotate3d(0, 0, 1, 0rad)";
+      return;
+    }
+    const axisX = normalized.x / axisFactor;
+    const axisY = normalized.y / axisFactor;
+    const axisZ = normalized.z / axisFactor;
+    cube.style.transform = `rotate3d(${axisX}, ${axisY}, ${axisZ}, ${angle}rad)`;
+  }
+
   function applyCubeSize() {
     if (rafId) {
       cancelAnimationFrame(rafId);
@@ -133,6 +212,71 @@ export function createCubeRenderer(container) {
       cube.style.setProperty("--cube-size", `${cubeSize}px`);
     });
   }
+}
+
+function normalizeQuaternion(quaternion) {
+  if (!quaternion || typeof quaternion !== "object") {
+    return null;
+  }
+  const x = Number(quaternion.x);
+  const y = Number(quaternion.y);
+  const z = Number(quaternion.z);
+  const w = Number(quaternion.w);
+  if (![x, y, z, w].every((value) => Number.isFinite(value))) {
+    return null;
+  }
+  const magnitude = Math.hypot(x, y, z, w);
+  if (magnitude < EPSILON) {
+    return null;
+  }
+  return {
+    x: x / magnitude,
+    y: y / magnitude,
+    z: z / magnitude,
+    w: w / magnitude,
+  };
+}
+
+function multiplyQuaternions(left, right) {
+  const a = normalizeQuaternion(left);
+  const b = normalizeQuaternion(right);
+  if (!a || !b) {
+    return { x: 0, y: 0, z: 0, w: 1 };
+  }
+  return normalizeQuaternion({
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+  });
+}
+
+function invertQuaternion(quaternion) {
+  const normalized = normalizeQuaternion(quaternion);
+  if (!normalized) {
+    return { x: 0, y: 0, z: 0, w: 1 };
+  }
+  return {
+    x: -normalized.x,
+    y: -normalized.y,
+    z: -normalized.z,
+    w: normalized.w,
+  };
+}
+
+function eulerToQuaternion(rotXDeg, rotYDeg) {
+  const halfX = (rotXDeg * Math.PI) / 360;
+  const halfY = (rotYDeg * Math.PI) / 360;
+  const sinX = Math.sin(halfX);
+  const cosX = Math.cos(halfX);
+  const sinY = Math.sin(halfY);
+  const cosY = Math.cos(halfY);
+  return normalizeQuaternion({
+    w: cosX * cosY,
+    x: sinX * cosY,
+    y: cosX * sinY,
+    z: -sinX * sinY,
+  });
 }
 
 function applyFacelets(stickers, facelets) {
