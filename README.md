@@ -37,9 +37,32 @@ The production bundle is generated in `dist/`.
 
 This project includes a Capacitor Android wrapper so you can generate a test APK.
 
+### One-time environment (Fedora / Nobara / Debian / Ubuntu)
+
+Installs **OpenJDK 21** (full JDK with `javac`, avoids Java 25 Gradle breakage) and **GitHub CLI** when missing:
+
 ```bash
 npm install
+npm run setup:android
+```
+
+Point Gradle at your SDK (Android Studio default is `~/Android/Sdk`):
+
+- Export `ANDROID_HOME="$HOME/Android/Sdk"`, **or**
+- Copy `android/local.properties.example` → `android/local.properties` and set `sdk.dir`.
+
+Then:
+
+```bash
 npm run apk:debug
+```
+
+### GitHub Release (APK asset for in-app updates)
+
+After `gh auth login` and a successful `npm run apk:debug`:
+
+```bash
+./scripts/publish-apk-release.sh v1.3.3 "Your release notes"
 ```
 
 Generated APK path:
@@ -50,7 +73,7 @@ Notes:
 
 - This is a rough prototype package for testing UI/timer flows.
 - Building the APK requires Android SDK + Java to be installed locally.
-- If your SDK is not auto-detected, set `ANDROID_HOME` / `ANDROID_SDK_ROOT`.
+- `npm run apk:debug` prefers JDK 21/17 with `javac` and warns if the SDK is missing.
 - Android builds use a native BLE transport (Capacitor BLE plugin), not Web Bluetooth.
 - Android native BLE picker is intentionally filtered to GAN-compatible devices.
 - Desktop browser builds continue to use Web Bluetooth.
