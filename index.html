@@ -12,6 +12,7 @@
       <p class="drawer-title">Navigation</p>
       <button id="nav-solve-btn" class="drawer-link active">Solve</button>
       <button id="nav-records-btn" class="drawer-link">Records</button>
+      <button id="nav-calibration-btn" class="drawer-link">Calibration</button>
       <button id="nav-updates-btn" class="drawer-link">Updates</button>
     </aside>
 
@@ -70,13 +71,7 @@
               <input id="orientation-sync-checkbox" type="checkbox" />
               Cube orientation sync
             </label>
-            <div class="orientation-calibration-actions">
-              <button id="start-orientation-calibration-btn">Calibrate 6 Faces</button>
-              <button id="capture-orientation-calibration-btn" disabled>Capture Face Up</button>
-              <button id="reset-orientation-calibration-btn">Reset Calibration</button>
-            </div>
             <p id="orientation-sync-status" class="meta-line">Orientation sync: off</p>
-            <p id="orientation-calibration-status" class="meta-line">Calibration: not set</p>
           </div>
           <div id="cube-viewport" class="cube-viewport"></div>
         </section>
@@ -116,6 +111,30 @@
             <button id="clear-solves-btn">Clear</button>
           </div>
           <ol id="solve-list"></ol>
+        </section>
+
+        <section id="solve-analysis-modal" class="card analysis-modal hidden">
+          <div class="history-header">
+            <h2 id="analysis-title">Solve Analysis</h2>
+            <button id="close-analysis-btn">Close</button>
+          </div>
+          <p id="analysis-summary" class="meta-line">No solve selected.</p>
+          <div id="analysis-details"></div>
+        </section>
+      </section>
+
+      <section id="calibration-screen" class="screen">
+        <section class="card calibration-card">
+          <h2>Orientation Calibration</h2>
+          <p class="meta-line">Gyro accuracy work in progress. Use this wizard when needed.</p>
+          <div class="orientation-calibration-actions">
+            <button id="start-orientation-calibration-btn">Calibrate 6 Faces</button>
+            <button id="capture-orientation-calibration-btn" disabled>Capture Face Up</button>
+            <button id="reset-orientation-calibration-btn">Reset Calibration</button>
+          </div>
+          <p id="orientation-calibration-status" class="meta-line">
+            Calibration: connect cube, then place each face up in sequence U, R, F, D, L, B.
+          </p>
         </section>
       </section>
 

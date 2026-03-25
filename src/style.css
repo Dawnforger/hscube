@@ -305,6 +305,66 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.analysis-modal.hidden {
+  display: none;
+}
+
+.analysis-summary-grid {
+  margin-top: 0.45rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.45rem;
+}
+
+.analysis-pill {
+  border: 1px solid #33415d;
+  border-radius: 8px;
+  background: #1f2838;
+  padding: 0.4rem 0.5rem;
+}
+
+.analysis-pill-label {
+  margin: 0;
+  color: #aebad1;
+  font-size: 0.8rem;
+}
+
+.analysis-pill-value {
+  margin: 0.1rem 0 0;
+  font-weight: 700;
+  color: #f2f6ff;
+}
+
+.analysis-table {
+  width: 100%;
+  margin-top: 0.7rem;
+  border-collapse: collapse;
+}
+
+.analysis-table th,
+.analysis-table td {
+  border-bottom: 1px solid #2f394f;
+  text-align: left;
+  padding: 0.35rem 0.2rem;
+  font-size: 0.9rem;
+}
+
+.analysis-table th {
+  color: #c8d3ea;
+  font-weight: 700;
+}
+
+.solve-list-item-button {
+  width: 100%;
+  text-align: left;
+  border: 1px solid #344362;
+  background: #1f2838;
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+  color: #f8f9fa;
+  cursor: pointer;
+}
+
 .workflow-grid {
   display: grid;
   gap: 0.55rem;

@@ -19,6 +19,14 @@ const SCRAMBLE_LENGTH = 20;
 const MAX_INSPECTION_SECONDS = 30;
 const CALIBRATION_FACE_SEQUENCE = ["U", "R", "F", "D", "L", "B"];
 const CALIBRATION_SAMPLE_COUNT = 20;
+const FACE_START_INDEX = {
+  U: 0,
+  R: 9,
+  F: 18,
+  D: 27,
+  L: 36,
+  B: 45,
+};
 const ORIENTATION_AXIS_REFERENCE = {
   U: { x: 0, y: 0, z: 1 },
   R: { x: 1, y: 0, z: 0 },
@@ -38,6 +46,9 @@ const SCRAMBLE_MODE = {
   FREE: "free",
   ALG: "alg",
 };
+const CFOP_PHASES = ["Cross/F2L", "OLL", "PLL"];
+const ROUX_PHASES = ["FB/SB", "CMLL", "LSE"];
+const LBL_PHASES = ["First Layer", "Second Layer", "Last Layer"];
 
 const elements = {
   menuToggleBtn: document.querySelector("#menu-toggle-btn"),
@@ -45,9 +56,11 @@ const elements = {
   drawerBackdrop: document.querySelector("#drawer-backdrop"),
   navSolveBtn: document.querySelector("#nav-solve-btn"),
   navRecordsBtn: document.querySelector("#nav-records-btn"),
+  navCalibrationBtn: document.querySelector("#nav-calibration-btn"),
   navUpdatesBtn: document.querySelector("#nav-updates-btn"),
   solveScreen: document.querySelector("#solve-screen"),
   recordsScreen: document.querySelector("#records-screen"),
+  calibrationScreen: document.querySelector("#calibration-screen"),
   updatesScreen: document.querySelector("#updates-screen"),
   connectBtn: document.querySelector("#connect-btn"),
   disconnectBtn: document.querySelector("#disconnect-btn"),
@@ -69,6 +82,11 @@ const elements = {
   totalSolves: document.querySelector("#total-solves"),
   ao5Value: document.querySelector("#ao5-value"),
   solveList: document.querySelector("#solve-list"),
+  solveAnalysisModal: document.querySelector("#solve-analysis-modal"),
+  analysisTitle: document.querySelector("#analysis-title"),
+  analysisSummary: document.querySelector("#analysis-summary"),
+  analysisDetails: document.querySelector("#analysis-details"),
+  closeAnalysisBtn: document.querySelector("#close-analysis-btn"),
   clearSolvesBtn: document.querySelector("#clear-solves-btn"),
   appVersion: document.querySelector("#app-version"),
   updateStatus: document.querySelector("#update-status"),
@@ -121,6 +139,8 @@ let pendingDoubleMoveDirection = null;
 let scrambleOffTrackMove = null;
 let inspectionEndPerfMs = 0;
 let inspectionFrameId = null;
+let activeSolveTrack = null;
+let selectedSolveId = null;
 
 const solves = loadSolves();
 const knownCubes = loadKnownCubes();
@@ -133,6 +153,7 @@ elements.menuToggleBtn.addEventListener("click", toggleDrawer);
 elements.drawerBackdrop.addEventListener("click", closeDrawer);
 elements.navSolveBtn.addEventListener("click", () => switchScreen("solve"));
 elements.navRecordsBtn.addEventListener("click", () => switchScreen("records"));
+elements.navCalibrationBtn.addEventListener("click", () => switchScreen("calibration"));
 elements.navUpdatesBtn.addEventListener("click", () => switchScreen("updates"));
 elements.resetCubeSyncBtn.addEventListener("click", () => {
   void resetCubeData();
@@ -156,6 +177,7 @@ elements.orientationSyncCheckbox.addEventListener("change", onOrientationSyncTog
 elements.startOrientationCalibrationBtn.addEventListener("click", startOrientationCalibration);
 elements.captureOrientationCalibrationBtn.addEventListener("click", captureOrientationCalibrationFace);
 elements.resetOrientationCalibrationBtn.addEventListener("click", resetOrientationCalibration);
+elements.closeAnalysisBtn.addEventListener("click", closeSolveAnalysis);
 
 document.addEventListener("keydown", (event) => {
   if (event.code !== "Space" || event.repeat) {
@@ -370,6 +392,7 @@ async function onGanCubeEvent(event) {
 
   if (event.type === "MOVE") {
     handleAlgScrambleMove(event.move);
+    captureSolveMoveEvent(event.move, event.timestamp);
     scheduleFaceletPoll();
     return;
   }
@@ -391,6 +414,7 @@ async function onGanCubeEvent(event) {
   currentCubeSolved = isFaceletsSolved(event.facelets);
   currentFacelets = event.facelets;
   cubeRenderer?.updateFromFacelets(currentFacelets);
+  captureSolveFaceletsEvent(currentFacelets, event.timestamp);
   setCubeSyncStatus(currentCubeSolved ? "Cube is solved." : "Cube state in sync.");
 
   if (workflowPhase === WORKFLOW_PHASE.SOLVING && timerRunning) {
@@ -597,6 +621,7 @@ function beginSolveTimer() {
   elapsedMs = 0;
   renderTimer();
   sawUnsolvedDuringRun = !currentCubeSolved;
+  createSolveTrack("cube");
   startTimer();
   setWorkflowStatus("Solve timer running...");
   renderWorkflow();
@@ -623,7 +648,10 @@ function stopTimer({ saveSolve, source }) {
   elements.manualToggleBtn.textContent = "Start / Stop (Space)";
 
   if (saveSolve && elapsedMs >= 10) {
-    addSolve(elapsedMs, source);
+    const analysis = closeSolveTrack(source, elapsedMs);
+    addSolve(elapsedMs, source, analysis);
+  } else {
+    activeSolveTrack = null;
   }
 }
 
@@ -642,6 +670,7 @@ function toggleManualTimer() {
 
   workflowPhase = WORKFLOW_PHASE.SOLVING;
   sawUnsolvedDuringRun = true;
+  createSolveTrack("manual");
   startTimer();
   setWorkflowStatus("Manual timer running.");
   renderWorkflow();
@@ -709,17 +738,26 @@ function renderWorkflow() {
 }
 
 function switchScreen(screen) {
-  activeScreen = screen === "records" || screen === "updates" ? screen : "solve";
+  activeScreen =
+    screen === "records" || screen === "updates" || screen === "calibration"
+      ? screen
+      : "solve";
 
   const solveActive = activeScreen === "solve";
   const recordsActive = activeScreen === "records";
+  const calibrationActive = activeScreen === "calibration";
   const updatesActive = activeScreen === "updates";
   elements.solveScreen.classList.toggle("active", solveActive);
   elements.recordsScreen.classList.toggle("active", recordsActive);
+  elements.calibrationScreen.classList.toggle("active", calibrationActive);
   elements.updatesScreen.classList.toggle("active", updatesActive);
   elements.navSolveBtn.classList.toggle("active", solveActive);
   elements.navRecordsBtn.classList.toggle("active", recordsActive);
+  elements.navCalibrationBtn.classList.toggle("active", calibrationActive);
   elements.navUpdatesBtn.classList.toggle("active", updatesActive);
+  if (!recordsActive) {
+    closeSolveAnalysis();
+  }
   closeDrawer();
 }
 
@@ -913,11 +951,14 @@ function formatInspectionTime(remainingMs) {
   return `${seconds.toFixed(1)}s`;
 }
 
-function addSolve(timeMs, source) {
+function addSolve(timeMs, source, analysis) {
+  const normalizedAnalysis = normalizeSolveAnalysis(analysis, timeMs);
   solves.push({
     id: crypto.randomUUID(),
     timeMs: Math.round(timeMs),
     source,
+    methodDetected: normalizedAnalysis.method,
+    analysis: normalizedAnalysis,
     recordedAt: new Date().toISOString(),
   });
   saveSolves(solves);
@@ -933,6 +974,7 @@ function clearSolves() {
     return;
   }
   solves.length = 0;
+  closeSolveAnalysis();
   saveSolves(solves);
   renderSolves();
 }
@@ -1093,7 +1135,13 @@ function renderSolves() {
   for (const solve of reversed) {
     const index = solves.findIndex((entry) => entry.id === solve.id) + 1;
     const item = document.createElement("li");
-    item.textContent = `#${index} - ${formatTime(solve.timeMs)} (${solve.source})`;
+    const button = document.createElement("button");
+    button.className = "solve-record-button";
+    button.type = "button";
+    const method = String(solve.methodDetected ?? "Unknown");
+    button.textContent = `#${index} - ${formatTime(solve.timeMs)} (${method})`;
+    button.addEventListener("click", () => openSolveAnalysis(solve.id));
+    item.append(button);
     elements.solveList.append(item);
   }
 }
@@ -1142,6 +1190,11 @@ function loadSolves() {
         id: typeof entry.id === "string" ? entry.id : crypto.randomUUID(),
         timeMs: Math.max(0, Math.round(entry.timeMs)),
         source: entry.source === "cube" ? "cube" : "manual",
+        methodDetected:
+          typeof entry.methodDetected === "string" && entry.methodDetected.trim()
+            ? entry.methodDetected.trim()
+            : "Unknown",
+        analysis: normalizeSolveAnalysis(entry.analysis, entry.timeMs),
         recordedAt:
           typeof entry.recordedAt === "string"
             ? entry.recordedAt
@@ -1154,6 +1207,353 @@ function loadSolves() {
 
 function saveSolves(value) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+}
+
+function openSolveAnalysis(solveId) {
+  const solve = solves.find((entry) => entry.id === solveId);
+  if (!solve) {
+    return;
+  }
+  selectedSolveId = solve.id;
+  renderSolveAnalysis(solve);
+  elements.solveAnalysisModal.classList.remove("hidden");
+}
+
+function closeSolveAnalysis() {
+  selectedSolveId = null;
+  elements.solveAnalysisModal.classList.add("hidden");
+}
+
+function renderSolveAnalysis(solve) {
+  const analysis = normalizeSolveAnalysis(solve.analysis, solve.timeMs);
+  elements.analysisTitle.textContent = `Solve ${formatTime(solve.timeMs)}`;
+  elements.analysisSummary.textContent = [
+    `Method: ${analysis.method}`,
+    `Moves: ${analysis.totalMoves}`,
+    `TPS: ${analysis.tps.toFixed(2)}`,
+    `Time: ${formatTime(solve.timeMs)}`,
+  ].join(" • ");
+
+  const details = document.createElement("div");
+  details.className = "analysis-grid";
+
+  const phasesHeader = document.createElement("h3");
+  phasesHeader.textContent = "Phase Breakdown";
+  details.append(phasesHeader);
+
+  const phaseList = document.createElement("ul");
+  phaseList.className = "analysis-phase-list";
+  for (const phase of analysis.phases) {
+    const li = document.createElement("li");
+    li.textContent = `${phase.name}: ${formatTime(phase.timeMs)} • ${phase.moves} moves`;
+    phaseList.append(li);
+  }
+  details.append(phaseList);
+
+  const topMovesHeader = document.createElement("h3");
+  topMovesHeader.textContent = "Move Distribution";
+  details.append(topMovesHeader);
+  const moveList = document.createElement("ul");
+  moveList.className = "analysis-phase-list";
+  for (const [face, count] of Object.entries(analysis.moveCountByFace)) {
+    if (count <= 0) {
+      continue;
+    }
+    const li = document.createElement("li");
+    li.textContent = `${face}: ${count}`;
+    moveList.append(li);
+  }
+  details.append(moveList);
+
+  elements.analysisDetails.replaceChildren(details);
+}
+
+function createSolveTrack(source) {
+  activeSolveTrack = {
+    source,
+    startedAtPerf: performance.now(),
+    startedAtIso: new Date().toISOString(),
+    moves: [],
+    faceletTimeline: [],
+    lastPhase: "cross_f2l",
+  };
+}
+
+function closeSolveTrack(source, totalTimeMs) {
+  const track = activeSolveTrack;
+  activeSolveTrack = null;
+  if (!track || track.source !== source) {
+    return buildFallbackAnalysis(source, totalTimeMs);
+  }
+
+  const moveEntries = track.moves;
+  const totalMoves = moveEntries.length;
+  const moveCountByFace = {
+    U: 0,
+    R: 0,
+    F: 0,
+    D: 0,
+    L: 0,
+    B: 0,
+    M: 0,
+    E: 0,
+    S: 0,
+    x: 0,
+    y: 0,
+    z: 0,
+  };
+  for (const entry of moveEntries) {
+    const face = entry.move[0];
+    if (face in moveCountByFace) {
+      moveCountByFace[face] += 1;
+    }
+  }
+
+  const method = detectSolveMethod(moveEntries, totalTimeMs);
+  const phases = buildPhaseStats(moveEntries, track.faceletTimeline, totalTimeMs, method);
+  return normalizeSolveAnalysis(
+    {
+      method,
+      totalMoves,
+      tps: totalTimeMs > 0 ? totalMoves / (totalTimeMs / 1000) : 0,
+      phases,
+      moveCountByFace,
+    },
+    totalTimeMs,
+  );
+}
+
+function captureSolveMoveEvent(moveToken, timestampMs) {
+  if (!timerRunning || !activeSolveTrack) {
+    return;
+  }
+  const move = normalizeMoveToken(moveToken) ?? String(moveToken ?? "").trim();
+  if (!move) {
+    return;
+  }
+  const offsetMs = Math.max(
+    0,
+    Number.isFinite(timestampMs) ? timestampMs - timerStartPerfMs : performance.now() - timerStartPerfMs,
+  );
+  activeSolveTrack.moves.push({
+    move,
+    offsetMs,
+  });
+}
+
+function captureSolveFaceletsEvent(facelets, timestampMs) {
+  if (!timerRunning || !activeSolveTrack) {
+    return;
+  }
+  const offsetMs = Math.max(
+    0,
+    Number.isFinite(timestampMs) ? timestampMs - timerStartPerfMs : performance.now() - timerStartPerfMs,
+  );
+  const phase = inferPhaseFromFacelets(facelets);
+  if (!phase) {
+    return;
+  }
+  const last = activeSolveTrack.faceletTimeline[activeSolveTrack.faceletTimeline.length - 1];
+  if (last && last.phase === phase && offsetMs - last.offsetMs < 120) {
+    return;
+  }
+  activeSolveTrack.faceletTimeline.push({ offsetMs, phase });
+}
+
+function inferPhaseFromFacelets(facelets) {
+  if (isFaceletsSolved(facelets)) {
+    return "solved";
+  }
+  if (typeof facelets !== "string" || facelets.length < 54) {
+    return null;
+  }
+  const solvedRef = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
+  const dFaceStart = 27;
+  let dSolved = 0;
+  for (let i = 0; i < 9; i += 1) {
+    if (facelets[dFaceStart + i] === solvedRef[dFaceStart + i]) {
+      dSolved += 1;
+    }
+  }
+
+  const sideFaces = [9, 18, 36, 45];
+  let f2lSolved = 0;
+  let f2lTotal = 24;
+  for (const start of sideFaces) {
+    for (const idx of [3, 4, 5, 6, 7, 8]) {
+      if (facelets[start + idx] === solvedRef[start + idx]) {
+        f2lSolved += 1;
+      }
+    }
+  }
+  const f2lRatio = f2lTotal > 0 ? f2lSolved / f2lTotal : 0;
+  const uSolved = facelets.slice(0, 9).split("").every((char) => char === "U");
+
+  if (dSolved < 7 || f2lRatio < 0.45) {
+    return "cross_f2l";
+  }
+  if (!uSolved) {
+    return "oll";
+  }
+  return "pll";
+}
+
+function detectSolveMethod(moveEntries, totalTimeMs) {
+  const totalMoves = moveEntries.length;
+  if (!totalMoves) {
+    return "Unknown";
+  }
+  const counts = {
+    U: 0,
+    R: 0,
+    F: 0,
+    D: 0,
+    L: 0,
+    B: 0,
+    M: 0,
+  };
+  for (const { move } of moveEntries) {
+    const face = move[0];
+    if (face in counts) {
+      counts[face] += 1;
+    }
+  }
+  const mRatio = counts.M / totalMoves;
+  const fbRatio = (counts.F + counts.B) / totalMoves;
+  const dRatio = counts.D / totalMoves;
+  const tps = totalTimeMs > 0 ? totalMoves / (totalTimeMs / 1000) : 0;
+
+  if (mRatio >= 0.15 && fbRatio < 0.12) {
+    return "Roux (heuristic)";
+  }
+  if (dRatio >= 0.18 && mRatio < 0.06) {
+    return "Minh Thai / Layer-by-layer (heuristic)";
+  }
+  if (tps > 1.2 && totalMoves >= 35) {
+    return "CFOP (heuristic)";
+  }
+  return "CFOP (heuristic)";
+}
+
+function buildPhaseStats(moveEntries, faceletTimeline, totalTimeMs, method) {
+  const phaseOrder =
+    method.startsWith("Roux") ? ROUX_PHASES : method.startsWith("Minh Thai") ? LBL_PHASES : CFOP_PHASES;
+  const phaseBuckets = phaseOrder.map((name) => ({ name, moves: 0, timeMs: 0 }));
+
+  const moveToBucket = (offsetMs) => {
+    const r = totalTimeMs > 0 ? offsetMs / totalTimeMs : 0;
+    if (phaseOrder.length === 3) {
+      if (r < 0.65) {
+        return 0;
+      }
+      if (r < 0.85) {
+        return 1;
+      }
+      return 2;
+    }
+    return 0;
+  };
+
+  // Use a time-based fallback split, but prefer inferred phases from facelets when available.
+  for (const move of moveEntries) {
+    let bucketIndex = moveToBucket(move.offsetMs);
+    if (Array.isArray(faceletTimeline) && faceletTimeline.length) {
+      const latestPhaseEntry = [...faceletTimeline]
+        .reverse()
+        .find((entry) => entry.offsetMs <= move.offsetMs);
+      if (latestPhaseEntry) {
+        if (latestPhaseEntry.phase === "oll") {
+          bucketIndex = 1;
+        } else if (latestPhaseEntry.phase === "pll" || latestPhaseEntry.phase === "solved") {
+          bucketIndex = 2;
+        } else {
+          bucketIndex = 0;
+        }
+      }
+    }
+    phaseBuckets[Math.max(0, Math.min(phaseBuckets.length - 1, bucketIndex))].moves += 1;
+  }
+
+  const boundaries = [0, Math.floor(totalTimeMs * 0.65), Math.floor(totalTimeMs * 0.85), totalTimeMs];
+  phaseBuckets[0].timeMs = Math.max(0, boundaries[1] - boundaries[0]);
+  phaseBuckets[1].timeMs = Math.max(0, boundaries[2] - boundaries[1]);
+  phaseBuckets[2].timeMs = Math.max(0, boundaries[3] - boundaries[2]);
+  return phaseBuckets;
+}
+
+function buildFallbackAnalysis(source, totalTimeMs) {
+  return normalizeSolveAnalysis(
+    {
+      method: source === "manual" ? "Manual / Unknown" : "Unknown",
+      totalMoves: 0,
+      tps: 0,
+      phases: CFOP_PHASES.map((name, index) => ({
+        name,
+        moves: 0,
+        timeMs: index === 0 ? totalTimeMs : 0,
+      })),
+      moveCountByFace: { U: 0, R: 0, F: 0, D: 0, L: 0, B: 0, M: 0, E: 0, S: 0, x: 0, y: 0, z: 0 },
+    },
+    totalTimeMs,
+  );
+}
+
+function normalizeSolveAnalysis(analysis, totalTimeMs) {
+  const safeTotal = Math.max(0, Math.round(totalTimeMs ?? 0));
+  const method = typeof analysis?.method === "string" && analysis.method.trim()
+    ? analysis.method.trim()
+    : "Unknown";
+  const totalMoves = Number.isFinite(analysis?.totalMoves) ? Math.max(0, Math.round(analysis.totalMoves)) : 0;
+  const tps =
+    Number.isFinite(analysis?.tps) && analysis.tps >= 0
+      ? Number(analysis.tps)
+      : safeTotal > 0
+        ? totalMoves / (safeTotal / 1000)
+        : 0;
+
+  const defaultPhases = CFOP_PHASES.map((name, index) => ({
+    name,
+    moves: 0,
+    timeMs: index === 0 ? safeTotal : 0,
+  }));
+  const phases = Array.isArray(analysis?.phases) && analysis.phases.length
+    ? analysis.phases.map((phase) => ({
+        name: typeof phase?.name === "string" && phase.name.trim() ? phase.name.trim() : "Phase",
+        moves: Number.isFinite(phase?.moves) ? Math.max(0, Math.round(phase.moves)) : 0,
+        timeMs: Number.isFinite(phase?.timeMs) ? Math.max(0, Math.round(phase.timeMs)) : 0,
+      }))
+    : defaultPhases;
+
+  const moveCountByFace = {
+    U: 0,
+    R: 0,
+    F: 0,
+    D: 0,
+    L: 0,
+    B: 0,
+    M: 0,
+    E: 0,
+    S: 0,
+    x: 0,
+    y: 0,
+    z: 0,
+  };
+  if (analysis?.moveCountByFace && typeof analysis.moveCountByFace === "object") {
+    for (const key of Object.keys(moveCountByFace)) {
+      const value = analysis.moveCountByFace[key];
+      if (Number.isFinite(value)) {
+        moveCountByFace[key] = Math.max(0, Math.round(value));
+      }
+    }
+  }
+
+  return {
+    method,
+    totalMoves,
+    tps,
+    phases,
+    moveCountByFace,
+  };
 }
 
 function pickLatestApkRelease(releases) {
