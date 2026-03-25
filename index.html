@@ -10,6 +10,7 @@
     <div id="drawer-backdrop" class="drawer-backdrop hidden"></div>
     <aside id="side-drawer" class="side-drawer">
       <p class="drawer-title">Navigation</p>
+      <button id="nav-bluetooth-btn" class="drawer-link">Pairing</button>
       <button id="nav-solve-btn" class="drawer-link active">Solve</button>
       <button id="nav-records-btn" class="drawer-link">Records</button>
       <button id="nav-calibration-btn" class="drawer-link">Calibration</button>
@@ -28,7 +29,7 @@
         </div>
       </header>
 
-      <section id="solve-screen" class="screen active">
+      <section id="bluetooth-screen" class="screen">
         <section class="card connection-card">
           <h2>Bluetooth</h2>
           <div class="connection-controls">
@@ -45,7 +46,9 @@
           </div>
           <p id="remembered-cubes-status" class="meta-line">Remembered cubes: none</p>
         </section>
+      </section>
 
+      <section id="solve-screen" class="screen active">
         <section class="card cube-card">
           <div class="history-header">
             <h2>Cube Sync</h2>

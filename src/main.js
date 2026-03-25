@@ -55,10 +55,12 @@ const elements = {
   menuToggleBtn: document.querySelector("#menu-toggle-btn"),
   sideDrawer: document.querySelector("#side-drawer"),
   drawerBackdrop: document.querySelector("#drawer-backdrop"),
+  navPairingBtn: document.querySelector("#nav-pairing-btn"),
   navSolveBtn: document.querySelector("#nav-solve-btn"),
   navRecordsBtn: document.querySelector("#nav-records-btn"),
   navCalibrationBtn: document.querySelector("#nav-calibration-btn"),
   navUpdatesBtn: document.querySelector("#nav-updates-btn"),
+  pairingScreen: document.querySelector("#pairing-screen"),
   solveScreen: document.querySelector("#solve-screen"),
   recordsScreen: document.querySelector("#records-screen"),
   calibrationScreen: document.querySelector("#calibration-screen"),
@@ -161,6 +163,7 @@ elements.disconnectBtn.addEventListener("click", () => {
 });
 elements.menuToggleBtn.addEventListener("click", toggleDrawer);
 elements.drawerBackdrop.addEventListener("click", closeDrawer);
+elements.navPairingBtn.addEventListener("click", () => switchScreen("pairing"));
 elements.navSolveBtn.addEventListener("click", () => switchScreen("solve"));
 elements.navRecordsBtn.addEventListener("click", () => switchScreen("records"));
 elements.navCalibrationBtn.addEventListener("click", () => switchScreen("calibration"));
@@ -756,18 +759,24 @@ function renderWorkflow() {
 
 function switchScreen(screen) {
   activeScreen =
-    screen === "records" || screen === "updates" || screen === "calibration"
+    screen === "pairing" ||
+    screen === "records" ||
+    screen === "updates" ||
+    screen === "calibration"
       ? screen
       : "solve";
 
+  const pairingActive = activeScreen === "pairing";
   const solveActive = activeScreen === "solve";
   const recordsActive = activeScreen === "records";
   const calibrationActive = activeScreen === "calibration";
   const updatesActive = activeScreen === "updates";
+  elements.pairingScreen.classList.toggle("active", pairingActive);
   elements.solveScreen.classList.toggle("active", solveActive);
   elements.recordsScreen.classList.toggle("active", recordsActive);
   elements.calibrationScreen.classList.toggle("active", calibrationActive);
   elements.updatesScreen.classList.toggle("active", updatesActive);
+  elements.navPairingBtn.classList.toggle("active", pairingActive);
   elements.navSolveBtn.classList.toggle("active", solveActive);
   elements.navRecordsBtn.classList.toggle("active", recordsActive);
   elements.navCalibrationBtn.classList.toggle("active", calibrationActive);
