@@ -365,6 +365,42 @@ button:disabled {
   cursor: pointer;
 }
 
+.solve-record-button {
+  width: 100%;
+  text-align: left;
+  border: 1px solid #344362;
+  background: #1f2838;
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+  color: #f8f9fa;
+  cursor: pointer;
+}
+
+.record-chart {
+  width: 100%;
+  display: block;
+  margin-top: 0.55rem;
+  border: 1px solid #2f394f;
+  border-radius: 10px;
+  background: #131a27;
+}
+
+.release-notes-block {
+  margin-top: 0.9rem;
+}
+
+.release-notes-block h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+}
+
+.release-notes-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
 .workflow-grid {
   display: grid;
   gap: 0.55rem;

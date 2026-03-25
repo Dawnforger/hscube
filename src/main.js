@@ -49,6 +49,7 @@ const SCRAMBLE_MODE = {
 const CFOP_PHASES = ["Cross/F2L", "OLL", "PLL"];
 const ROUX_PHASES = ["FB/SB", "CMLL", "LSE"];
 const LBL_PHASES = ["First Layer", "Second Layer", "Last Layer"];
+const SOLVED_FACELETS = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
 
 const elements = {
   menuToggleBtn: document.querySelector("#menu-toggle-btn"),
@@ -81,6 +82,14 @@ const elements = {
   scrambleProgress: document.querySelector("#scramble-progress"),
   totalSolves: document.querySelector("#total-solves"),
   ao5Value: document.querySelector("#ao5-value"),
+  recordsMethodFilter: document.querySelector("#records-method-filter"),
+  recordsSortSelect: document.querySelector("#records-sort-select"),
+  exportSolvesJsonBtn: document.querySelector("#export-solves-json-btn"),
+  exportSolvesCsvBtn: document.querySelector("#export-solves-csv-btn"),
+  importSolvesBtn: document.querySelector("#import-solves-btn"),
+  importSolvesInput: document.querySelector("#import-solves-input"),
+  movesTimeChart: document.querySelector("#moves-time-chart"),
+  tpsTrendChart: document.querySelector("#tps-trend-chart"),
   solveList: document.querySelector("#solve-list"),
   solveAnalysisModal: document.querySelector("#solve-analysis-modal"),
   analysisTitle: document.querySelector("#analysis-title"),
@@ -90,6 +99,7 @@ const elements = {
   clearSolvesBtn: document.querySelector("#clear-solves-btn"),
   appVersion: document.querySelector("#app-version"),
   updateStatus: document.querySelector("#update-status"),
+  releaseNotesList: document.querySelector("#release-notes-list"),
   checkUpdateBtn: document.querySelector("#check-update-btn"),
   downloadUpdateBtn: document.querySelector("#download-update-btn"),
   autoConnectCheckbox: document.querySelector("#auto-connect-checkbox"),
@@ -167,6 +177,12 @@ elements.startInspectionBtn.addEventListener("click", () => startInspection());
 elements.scrambleModeSelect.addEventListener("change", onWorkflowConfigChange);
 elements.inspectionSecondsInput.addEventListener("change", onWorkflowConfigChange);
 elements.clearSolvesBtn.addEventListener("click", clearSolves);
+elements.recordsMethodFilter.addEventListener("change", renderSolves);
+elements.recordsSortSelect.addEventListener("change", renderSolves);
+elements.exportSolvesJsonBtn.addEventListener("click", exportSolvesJson);
+elements.exportSolvesCsvBtn.addEventListener("click", exportSolvesCsv);
+elements.importSolvesBtn.addEventListener("click", () => elements.importSolvesInput.click());
+elements.importSolvesInput.addEventListener("change", onImportSolvesSelected);
 elements.checkUpdateBtn.addEventListener("click", () => {
   void checkForUpdate({ userInitiated: true });
 });
@@ -212,6 +228,7 @@ async function bootstrap() {
   renderRememberedCubesStatus();
   renderWorkflow();
   updateOrientationCalibrationStatus();
+  renderReleaseNotes([]);
   elements.appVersion.textContent = APP_VERSION;
   elements.autoConnectCheckbox.checked = loadAutoConnectPreference();
   setUpdateStatus("Not checked yet.");
@@ -1001,6 +1018,7 @@ async function checkForUpdate({ userInitiated }) {
     if (!Array.isArray(releases)) {
       throw new Error("Unexpected release payload.");
     }
+    renderReleaseNotes(releases);
 
     const latestRelease = pickLatestApkRelease(releases);
     if (!latestRelease) {
@@ -1121,18 +1139,23 @@ function renderSolves() {
 
   const ao5 = calculateAo5(solves);
   elements.ao5Value.textContent = ao5 === null ? "N/A" : formatTime(ao5);
+  renderRecordMethodOptions();
+
+  const visibleSolves = getVisibleSolves();
 
   elements.solveList.replaceChildren();
 
-  if (!solves.length) {
+  if (!visibleSolves.length) {
     const emptyItem = document.createElement("li");
-    emptyItem.textContent = "No solves recorded yet.";
+    emptyItem.textContent = solves.length
+      ? "No solves match current filters."
+      : "No solves recorded yet.";
     elements.solveList.append(emptyItem);
+    renderRecordsCharts([]);
     return;
   }
 
-  const reversed = [...solves].reverse();
-  for (const solve of reversed) {
+  for (const solve of visibleSolves) {
     const index = solves.findIndex((entry) => entry.id === solve.id) + 1;
     const item = document.createElement("li");
     const button = document.createElement("button");
@@ -1144,6 +1167,426 @@ function renderSolves() {
     item.append(button);
     elements.solveList.append(item);
   }
+
+  renderRecordsCharts(visibleSolves);
+}
+
+function renderRecordMethodOptions() {
+  const currentValue = elements.recordsMethodFilter.value || "all";
+  const methods = new Set();
+  for (const solve of solves) {
+    const normalized = normalizeSolveAnalysis(solve.analysis, solve.timeMs);
+    methods.add(normalized.method || "Unknown");
+  }
+
+  const options = ["all", ...[...methods].sort((left, right) => left.localeCompare(right))];
+  elements.recordsMethodFilter.replaceChildren();
+  for (const method of options) {
+    const option = document.createElement("option");
+    option.value = method;
+    option.textContent = method === "all" ? "All methods" : method;
+    elements.recordsMethodFilter.append(option);
+  }
+
+  const safeValue = options.includes(currentValue) ? currentValue : "all";
+  elements.recordsMethodFilter.value = safeValue;
+}
+
+function getVisibleSolves() {
+  const methodFilter = elements.recordsMethodFilter.value || "all";
+  const sortMode = elements.recordsSortSelect.value || "newest";
+  const filtered = solves.filter((solve) => {
+    if (methodFilter === "all") {
+      return true;
+    }
+    const analysis = normalizeSolveAnalysis(solve.analysis, solve.timeMs);
+    return analysis.method === methodFilter;
+  });
+
+  const sorted = [...filtered];
+  sorted.sort((left, right) => {
+    const leftAnalysis = normalizeSolveAnalysis(left.analysis, left.timeMs);
+    const rightAnalysis = normalizeSolveAnalysis(right.analysis, right.timeMs);
+    switch (sortMode) {
+      case "oldest":
+        return getSolveTimestamp(left) - getSolveTimestamp(right);
+      case "fastest":
+        return left.timeMs - right.timeMs;
+      case "slowest":
+        return right.timeMs - left.timeMs;
+      case "moves-low":
+        return leftAnalysis.totalMoves - rightAnalysis.totalMoves;
+      case "moves-high":
+        return rightAnalysis.totalMoves - leftAnalysis.totalMoves;
+      case "tps-low":
+        return leftAnalysis.tps - rightAnalysis.tps;
+      case "tps-high":
+        return rightAnalysis.tps - leftAnalysis.tps;
+      case "newest":
+      default:
+        return getSolveTimestamp(right) - getSolveTimestamp(left);
+    }
+  });
+  return sorted;
+}
+
+function getSolveTimestamp(solve) {
+  const timestamp = Date.parse(solve?.recordedAt ?? "");
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function exportSolvesJson() {
+  const payload = {
+    schema: "hs-cube-solves-export-v1",
+    appVersion: APP_VERSION,
+    exportedAt: new Date().toISOString(),
+    solves,
+  };
+  triggerDownload(
+    `hs-cube-solves-${makeTimestampTag()}.json`,
+    JSON.stringify(payload, null, 2),
+    "application/json",
+  );
+}
+
+function exportSolvesCsv() {
+  const rows = getVisibleSolves().map((solve) => {
+    const analysis = normalizeSolveAnalysis(solve.analysis, solve.timeMs);
+    const phaseSummary = analysis.phases
+      .map((phase) => `${phase.name}:${phase.moves}/${phase.timeMs}`)
+      .join(" | ");
+    return [
+      solve.id,
+      solve.recordedAt,
+      solve.source,
+      solve.timeMs,
+      formatTime(solve.timeMs),
+      analysis.method,
+      analysis.totalMoves,
+      analysis.tps.toFixed(3),
+      phaseSummary,
+    ];
+  });
+  const header = [
+    "id",
+    "recorded_at",
+    "source",
+    "time_ms",
+    "time_display",
+    "method",
+    "total_moves",
+    "tps",
+    "phase_breakdown",
+  ];
+  const csv = [header, ...rows].map((row) => row.map(toCsvCell).join(",")).join("\n");
+  triggerDownload(`hs-cube-solves-${makeTimestampTag()}.csv`, csv, "text/csv;charset=utf-8");
+}
+
+async function onImportSolvesSelected(event) {
+  const input = event?.target;
+  const file = input?.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    const imported = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.solves)
+        ? parsed.solves
+        : null;
+    if (!imported) {
+      throw new Error("Import file must be a solves array or object with a solves array.");
+    }
+
+    const existingIds = new Set(solves.map((solve) => solve.id));
+    let added = 0;
+    let skipped = 0;
+
+    for (const entry of imported) {
+      if (!Number.isFinite(entry?.timeMs)) {
+        skipped += 1;
+        continue;
+      }
+      const timeMs = Math.max(0, Math.round(entry.timeMs));
+      const analysis = normalizeSolveAnalysis(entry.analysis, timeMs);
+      const preferredId =
+        typeof entry?.id === "string" && entry.id.trim() ? entry.id.trim() : crypto.randomUUID();
+      const id = existingIds.has(preferredId) ? crypto.randomUUID() : preferredId;
+      existingIds.add(id);
+
+      solves.push({
+        id,
+        timeMs,
+        source: entry?.source === "cube" ? "cube" : "manual",
+        methodDetected:
+          typeof entry?.methodDetected === "string" && entry.methodDetected.trim()
+            ? entry.methodDetected.trim()
+            : analysis.method,
+        analysis,
+        recordedAt:
+          typeof entry?.recordedAt === "string" && entry.recordedAt.trim()
+            ? entry.recordedAt
+            : new Date().toISOString(),
+      });
+      added += 1;
+    }
+
+    solves.sort((left, right) => getSolveTimestamp(left) - getSolveTimestamp(right));
+    saveSolves(solves);
+    renderSolves();
+    window.alert(`Import complete. Added ${added} solves, skipped ${skipped}.`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    window.alert(`Import failed: ${message}`);
+  } finally {
+    input.value = "";
+  }
+}
+
+function renderRecordsCharts(visibleSolves) {
+  if (!elements.movesTimeChart || !elements.tpsTrendChart) {
+    return;
+  }
+  const movesVsTime = visibleSolves.map((solve) => {
+    const analysis = normalizeSolveAnalysis(solve.analysis, solve.timeMs);
+    return {
+      x: solve.timeMs / 1000,
+      y: analysis.totalMoves,
+    };
+  });
+  drawLineChart(elements.movesTimeChart, movesVsTime, {
+    title: "Moves vs Time",
+    xLabel: "Time (s)",
+    yLabel: "Moves",
+    color: "#78a6ff",
+  });
+
+  const tpsTrend = visibleSolves.map((solve, index) => {
+    const analysis = normalizeSolveAnalysis(solve.analysis, solve.timeMs);
+    return {
+      x: index + 1,
+      y: analysis.tps,
+    };
+  });
+  drawLineChart(elements.tpsTrendChart, tpsTrend, {
+    title: "TPS Trend",
+    xLabel: "Solve #",
+    yLabel: "TPS",
+    color: "#80dbb2",
+  });
+}
+
+function drawLineChart(svgElement, points, options) {
+  svgElement.replaceChildren();
+  const width = Number(svgElement.getAttribute("viewBox")?.split(" ")[2]) || 300;
+  const height = Number(svgElement.getAttribute("viewBox")?.split(" ")[3]) || 140;
+  const margin = { top: 18, right: 12, bottom: 24, left: 34 };
+  const plotWidth = Math.max(1, width - margin.left - margin.right);
+  const plotHeight = Math.max(1, height - margin.top - margin.bottom);
+
+  if (!Array.isArray(points) || points.length === 0) {
+    const empty = createSvgNode("text", {
+      x: width / 2,
+      y: height / 2,
+      "text-anchor": "middle",
+      fill: "#9fb0cd",
+      "font-size": "11",
+    });
+    empty.textContent = "No data for current filters";
+    svgElement.append(empty);
+    return;
+  }
+
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const point of points) {
+    minX = Math.min(minX, point.x);
+    maxX = Math.max(maxX, point.x);
+    minY = Math.min(minY, point.y);
+    maxY = Math.max(maxY, point.y);
+  }
+  minY = Math.min(0, minY);
+  if (minX === maxX) {
+    maxX += 1;
+  }
+  if (minY === maxY) {
+    maxY += 1;
+  }
+
+  const projectX = (value) => margin.left + ((value - minX) / (maxX - minX)) * plotWidth;
+  const projectY = (value) => margin.top + plotHeight - ((value - minY) / (maxY - minY)) * plotHeight;
+
+  const xAxis = createSvgNode("line", {
+    x1: margin.left,
+    y1: margin.top + plotHeight,
+    x2: margin.left + plotWidth,
+    y2: margin.top + plotHeight,
+    stroke: "#3a4b6b",
+    "stroke-width": "1",
+  });
+  const yAxis = createSvgNode("line", {
+    x1: margin.left,
+    y1: margin.top,
+    x2: margin.left,
+    y2: margin.top + plotHeight,
+    stroke: "#3a4b6b",
+    "stroke-width": "1",
+  });
+  svgElement.append(xAxis, yAxis);
+
+  for (let tick = 1; tick <= 3; tick += 1) {
+    const y = margin.top + (plotHeight * tick) / 4;
+    svgElement.append(
+      createSvgNode("line", {
+        x1: margin.left,
+        y1: y,
+        x2: margin.left + plotWidth,
+        y2: y,
+        stroke: "#25324b",
+        "stroke-width": "1",
+      }),
+    );
+  }
+
+  let pathData = "";
+  points.forEach((point, index) => {
+    const x = projectX(point.x);
+    const y = projectY(point.y);
+    pathData += `${index === 0 ? "M" : " L"}${x.toFixed(2)} ${y.toFixed(2)}`;
+  });
+  const path = createSvgNode("path", {
+    d: pathData,
+    fill: "none",
+    stroke: options.color ?? "#78a6ff",
+    "stroke-width": "2",
+    "stroke-linecap": "round",
+    "stroke-linejoin": "round",
+  });
+  svgElement.append(path);
+
+  for (const point of points) {
+    svgElement.append(
+      createSvgNode("circle", {
+        cx: projectX(point.x),
+        cy: projectY(point.y),
+        r: "2.2",
+        fill: options.color ?? "#78a6ff",
+      }),
+    );
+  }
+
+  const title = createSvgNode("text", {
+    x: margin.left,
+    y: 12,
+    fill: "#d6e3fc",
+    "font-size": "10",
+    "font-weight": "600",
+  });
+  title.textContent = options.title ?? "";
+  svgElement.append(title);
+}
+
+function createSvgNode(name, attributes) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [key, value] of Object.entries(attributes)) {
+    node.setAttribute(key, String(value));
+  }
+  return node;
+}
+
+function renderReleaseNotes(releases) {
+  if (!elements.releaseNotesList) {
+    return;
+  }
+  elements.releaseNotesList.replaceChildren();
+  const list = Array.isArray(releases)
+    ? releases.filter((release) => !release?.draft).slice(0, 5)
+    : [];
+  if (!list.length) {
+    const placeholder = document.createElement("li");
+    placeholder.className = "meta-line";
+    placeholder.textContent = "No release notes loaded yet.";
+    elements.releaseNotesList.append(placeholder);
+    return;
+  }
+
+  for (const release of list) {
+    const item = document.createElement("li");
+    const tag = String(release?.tag_name ?? release?.name ?? "Untitled release");
+    const dateMs = Date.parse(String(release?.published_at ?? ""));
+    const date = Number.isFinite(dateMs) ? new Date(dateMs).toLocaleDateString() : "Unknown date";
+    const summary = summarizeReleaseBody(release?.body);
+    const url = typeof release?.html_url === "string" ? release.html_url : null;
+    if (url) {
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = `${tag} (${date})`;
+      item.append(link);
+    } else {
+      const label = document.createElement("strong");
+      label.textContent = `${tag} (${date})`;
+      item.append(label);
+    }
+    const note = document.createElement("div");
+    note.className = "meta-line";
+    note.textContent = summary;
+    item.append(note);
+    elements.releaseNotesList.append(item);
+  }
+}
+
+function summarizeReleaseBody(body) {
+  if (typeof body !== "string" || !body.trim()) {
+    return "No notes provided.";
+  }
+  const lines = body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^[-*#\d.)\s]+/, ""))
+    .filter(Boolean)
+    .slice(0, 2);
+  const summary = lines.join(" • ");
+  if (!summary) {
+    return "No notes provided.";
+  }
+  return summary.length > 180 ? `${summary.slice(0, 177)}...` : summary;
+}
+
+function triggerDownload(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function toCsvCell(value) {
+  const text = String(value ?? "");
+  const escaped = text.replace(/"/g, "\"\"");
+  return /[",\n]/.test(escaped) ? `"${escaped}"` : escaped;
+}
+
+function makeTimestampTag() {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  const hh = String(now.getHours()).padStart(2, "0");
+  const min = String(now.getMinutes()).padStart(2, "0");
+  const ss = String(now.getSeconds()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}-${hh}${min}${ss}`;
 }
 
 function formatTime(timeMs) {
@@ -1344,7 +1787,8 @@ function inferPhaseFromFacelets(facelets) {
   if (typeof facelets !== "string" || facelets.length < 54) {
     return null;
   }
-  const solvedRef = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
+
+  const solvedRef = SOLVED_FACELETS;
   const dFaceStart = 27;
   let dSolved = 0;
   for (let i = 0; i < 9; i += 1) {
@@ -1380,6 +1824,9 @@ function detectSolveMethod(moveEntries, totalTimeMs) {
   if (!totalMoves) {
     return "Unknown";
   }
+  if (totalMoves < 8) {
+    return "Unknown (insufficient data)";
+  }
   const counts = {
     U: 0,
     R: 0,
@@ -1388,25 +1835,45 @@ function detectSolveMethod(moveEntries, totalTimeMs) {
     L: 0,
     B: 0,
     M: 0,
+    E: 0,
+    S: 0,
+    u: 0,
+    r: 0,
+    f: 0,
+    d: 0,
+    l: 0,
+    b: 0,
+    x: 0,
+    y: 0,
+    z: 0,
   };
   for (const { move } of moveEntries) {
-    const face = move[0];
+    const token = String(move ?? "").trim();
+    const face = token[0];
     if (face in counts) {
       counts[face] += 1;
     }
   }
   const mRatio = counts.M / totalMoves;
-  const fbRatio = (counts.F + counts.B) / totalMoves;
-  const dRatio = counts.D / totalMoves;
+  const sliceRatio = (counts.M + counts.E + counts.S) / totalMoves;
+  const wideRatio = (counts.u + counts.r + counts.f + counts.d + counts.l + counts.b) / totalMoves;
+  const fbRatio = (counts.F + counts.B + counts.f + counts.b) / totalMoves;
+  const dRatio = (counts.D + counts.d) / totalMoves;
+  const rotationRatio = (counts.x + counts.y + counts.z) / totalMoves;
+  const doubleRatio =
+    moveEntries.reduce(
+      (accumulator, entry) => accumulator + (String(entry.move ?? "").includes("2") ? 1 : 0),
+      0,
+    ) / totalMoves;
   const tps = totalTimeMs > 0 ? totalMoves / (totalTimeMs / 1000) : 0;
 
-  if (mRatio >= 0.15 && fbRatio < 0.12) {
+  if (mRatio >= 0.14 || (sliceRatio >= 0.2 && dRatio < 0.12 && fbRatio < 0.22)) {
     return "Roux (heuristic)";
   }
-  if (dRatio >= 0.18 && mRatio < 0.06) {
+  if (dRatio >= 0.16 && mRatio < 0.08 && tps < 3.5) {
     return "Minh Thai / Layer-by-layer (heuristic)";
   }
-  if (tps > 1.2 && totalMoves >= 35) {
+  if (wideRatio > 0.18 && rotationRatio > 0.06 && doubleRatio > 0.2) {
     return "CFOP (heuristic)";
   }
   return "CFOP (heuristic)";
@@ -1416,42 +1883,71 @@ function buildPhaseStats(moveEntries, faceletTimeline, totalTimeMs, method) {
   const phaseOrder =
     method.startsWith("Roux") ? ROUX_PHASES : method.startsWith("Minh Thai") ? LBL_PHASES : CFOP_PHASES;
   const phaseBuckets = phaseOrder.map((name) => ({ name, moves: 0, timeMs: 0 }));
+  const safeTotal = Math.max(0, Math.round(totalTimeMs));
+  let splitA = Math.floor(safeTotal * 0.65);
+  let splitB = Math.floor(safeTotal * 0.85);
+  if (method.startsWith("Roux")) {
+    splitA = Math.floor(safeTotal * 0.58);
+    splitB = Math.floor(safeTotal * 0.84);
+  } else if (method.startsWith("Minh Thai")) {
+    splitA = Math.floor(safeTotal * 0.68);
+    splitB = Math.floor(safeTotal * 0.9);
+  }
 
-  const moveToBucket = (offsetMs) => {
-    const r = totalTimeMs > 0 ? offsetMs / totalTimeMs : 0;
-    if (phaseOrder.length === 3) {
-      if (r < 0.65) {
-        return 0;
-      }
-      if (r < 0.85) {
-        return 1;
-      }
+  if (Array.isArray(faceletTimeline) && faceletTimeline.length > 1) {
+    const firstOll = faceletTimeline.find((entry) => entry.phase === "oll");
+    const firstPll = faceletTimeline.find(
+      (entry) => entry.phase === "pll" || entry.phase === "solved",
+    );
+    if (
+      Number.isFinite(firstOll?.offsetMs) &&
+      Number.isFinite(firstPll?.offsetMs) &&
+      firstPll.offsetMs > firstOll.offsetMs
+    ) {
+      splitA = Math.max(0, Math.min(safeTotal, Math.round(firstOll.offsetMs)));
+      splitB = Math.max(splitA, Math.min(safeTotal, Math.round(firstPll.offsetMs)));
+    }
+  }
+
+  const boundaries = [0, splitA, splitB, safeTotal];
+  const toBucketByTime = (offsetMs) => {
+    if (offsetMs < boundaries[1]) {
+      return 0;
+    }
+    if (offsetMs < boundaries[2]) {
+      return 1;
+    }
+    return 2;
+  };
+  const toBucketByFaceletPhase = (phase) => {
+    if (phase === "oll") {
+      return 1;
+    }
+    if (phase === "pll" || phase === "solved") {
       return 2;
     }
     return 0;
   };
 
-  // Use a time-based fallback split, but prefer inferred phases from facelets when available.
+  const timeline = Array.isArray(faceletTimeline)
+    ? [...faceletTimeline].sort((left, right) => left.offsetMs - right.offsetMs)
+    : [];
+  let timelineIndex = 0;
   for (const move of moveEntries) {
-    let bucketIndex = moveToBucket(move.offsetMs);
-    if (Array.isArray(faceletTimeline) && faceletTimeline.length) {
-      const latestPhaseEntry = [...faceletTimeline]
-        .reverse()
-        .find((entry) => entry.offsetMs <= move.offsetMs);
-      if (latestPhaseEntry) {
-        if (latestPhaseEntry.phase === "oll") {
-          bucketIndex = 1;
-        } else if (latestPhaseEntry.phase === "pll" || latestPhaseEntry.phase === "solved") {
-          bucketIndex = 2;
-        } else {
-          bucketIndex = 0;
-        }
-      }
+    let bucket = toBucketByTime(move.offsetMs);
+    while (
+      timelineIndex + 1 < timeline.length &&
+      Number(timeline[timelineIndex + 1]?.offsetMs) <= Number(move.offsetMs)
+    ) {
+      timelineIndex += 1;
     }
-    phaseBuckets[Math.max(0, Math.min(phaseBuckets.length - 1, bucketIndex))].moves += 1;
+    const phase = timeline[timelineIndex]?.phase;
+    if (phase) {
+      bucket = toBucketByFaceletPhase(phase);
+    }
+    phaseBuckets[Math.max(0, Math.min(phaseBuckets.length - 1, bucket))].moves += 1;
   }
 
-  const boundaries = [0, Math.floor(totalTimeMs * 0.65), Math.floor(totalTimeMs * 0.85), totalTimeMs];
   phaseBuckets[0].timeMs = Math.max(0, boundaries[1] - boundaries[0]);
   phaseBuckets[1].timeMs = Math.max(0, boundaries[2] - boundaries[1]);
   phaseBuckets[2].timeMs = Math.max(0, boundaries[3] - boundaries[2]);

@@ -107,6 +107,46 @@
 
         <section class="card history-card">
           <div class="history-header">
+            <h2>Record Tools</h2>
+          </div>
+          <div class="workflow-grid">
+            <label class="field-label">
+              Filter by method
+              <select id="records-method-filter">
+                <option value="all" selected>All methods</option>
+              </select>
+            </label>
+            <label class="field-label">
+              Sort
+              <select id="records-sort-select">
+                <option value="newest" selected>Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="fastest">Fastest time</option>
+                <option value="slowest">Slowest time</option>
+                <option value="moves-low">Fewest moves</option>
+                <option value="moves-high">Most moves</option>
+                <option value="tps-high">Highest TPS</option>
+                <option value="tps-low">Lowest TPS</option>
+              </select>
+            </label>
+          </div>
+          <div class="update-controls">
+            <button id="export-solves-json-btn">Export JSON</button>
+            <button id="export-solves-csv-btn">Export CSV</button>
+            <button id="import-solves-btn">Import JSON</button>
+            <input id="import-solves-input" type="file" accept=".json,application/json" hidden />
+          </div>
+        </section>
+
+        <section class="card history-card">
+          <h2>Analytics Trends</h2>
+          <p class="meta-line">Moves vs time and TPS trend for the current filtered view.</p>
+          <svg id="moves-time-chart" class="record-chart" viewBox="0 0 300 140" role="img" aria-label="Moves versus time chart"></svg>
+          <svg id="tps-trend-chart" class="record-chart" viewBox="0 0 300 140" role="img" aria-label="Turns per second chart"></svg>
+        </section>
+
+        <section class="card history-card">
+          <div class="history-header">
             <h2>Solve History</h2>
             <button id="clear-solves-btn">Clear</button>
           </div>
@@ -145,6 +185,12 @@
           <div class="update-controls">
             <button id="check-update-btn">Check for update</button>
             <button id="download-update-btn" disabled>Open latest APK</button>
+          </div>
+          <div class="release-notes-block">
+            <h3>Recent Release Notes</h3>
+            <ul id="release-notes-list" class="release-notes-list">
+              <li class="meta-line">No release notes loaded yet.</li>
+            </ul>
           </div>
         </section>
       </section>
