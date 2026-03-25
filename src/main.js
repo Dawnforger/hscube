@@ -1250,20 +1250,18 @@ function renderSolveAnalysis(solve) {
   }
   details.append(phaseList);
 
-  const topMovesHeader = document.createElement("h3");
-  topMovesHeader.textContent = "Move Distribution";
-  details.append(topMovesHeader);
-  const moveList = document.createElement("ul");
-  moveList.className = "analysis-phase-list";
-  for (const [face, count] of Object.entries(analysis.moveCountByFace)) {
-    if (count <= 0) {
-      continue;
-    }
+  const distributionHeader = document.createElement("h3");
+  distributionHeader.textContent = "Move Distribution by Phase";
+  details.append(distributionHeader);
+  const distributionList = document.createElement("ul");
+  distributionList.className = "analysis-phase-list";
+  for (const phase of analysis.phases) {
+    const ratio = analysis.totalMoves > 0 ? (phase.moves / analysis.totalMoves) * 100 : 0;
     const li = document.createElement("li");
-    li.textContent = `${face}: ${count}`;
-    moveList.append(li);
+    li.textContent = `${phase.name}: ${phase.moves} moves (${ratio.toFixed(1)}%)`;
+    distributionList.append(li);
   }
-  details.append(moveList);
+  details.append(distributionList);
 
   elements.analysisDetails.replaceChildren(details);
 }
@@ -1288,26 +1286,6 @@ function closeSolveTrack(source, totalTimeMs) {
 
   const moveEntries = track.moves;
   const totalMoves = moveEntries.length;
-  const moveCountByFace = {
-    U: 0,
-    R: 0,
-    F: 0,
-    D: 0,
-    L: 0,
-    B: 0,
-    M: 0,
-    E: 0,
-    S: 0,
-    x: 0,
-    y: 0,
-    z: 0,
-  };
-  for (const entry of moveEntries) {
-    const face = entry.move[0];
-    if (face in moveCountByFace) {
-      moveCountByFace[face] += 1;
-    }
-  }
 
   const method = detectSolveMethod(moveEntries, totalTimeMs);
   const phases = buildPhaseStats(moveEntries, track.faceletTimeline, totalTimeMs, method);
@@ -1317,7 +1295,6 @@ function closeSolveTrack(source, totalTimeMs) {
       totalMoves,
       tps: totalTimeMs > 0 ? totalMoves / (totalTimeMs / 1000) : 0,
       phases,
-      moveCountByFace,
     },
     totalTimeMs,
   );
@@ -1492,7 +1469,6 @@ function buildFallbackAnalysis(source, totalTimeMs) {
         moves: 0,
         timeMs: index === 0 ? totalTimeMs : 0,
       })),
-      moveCountByFace: { U: 0, R: 0, F: 0, D: 0, L: 0, B: 0, M: 0, E: 0, S: 0, x: 0, y: 0, z: 0 },
     },
     totalTimeMs,
   );
@@ -1524,35 +1500,11 @@ function normalizeSolveAnalysis(analysis, totalTimeMs) {
       }))
     : defaultPhases;
 
-  const moveCountByFace = {
-    U: 0,
-    R: 0,
-    F: 0,
-    D: 0,
-    L: 0,
-    B: 0,
-    M: 0,
-    E: 0,
-    S: 0,
-    x: 0,
-    y: 0,
-    z: 0,
-  };
-  if (analysis?.moveCountByFace && typeof analysis.moveCountByFace === "object") {
-    for (const key of Object.keys(moveCountByFace)) {
-      const value = analysis.moveCountByFace[key];
-      if (Number.isFinite(value)) {
-        moveCountByFace[key] = Math.max(0, Math.round(value));
-      }
-    }
-  }
-
   return {
     method,
     totalMoves,
     tps,
     phases,
-    moveCountByFace,
   };
 }
 
