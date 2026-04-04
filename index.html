@@ -14,6 +14,7 @@
       <button id="nav-solve-btn" class="drawer-link active">Solve</button>
       <button id="nav-records-btn" class="drawer-link">Records</button>
       <button id="nav-calibration-btn" class="drawer-link">Calibration</button>
+      <button id="nav-debug-btn" class="drawer-link">Debug</button>
       <button id="nav-updates-btn" class="drawer-link">Updates</button>
     </aside>
 
@@ -178,6 +179,82 @@
           <p id="orientation-calibration-status" class="meta-line">
             Calibration: connect cube, then place each face up in sequence U, R, F, D, L, B.
           </p>
+        </section>
+      </section>
+
+      <section id="debug-screen" class="screen">
+        <section class="card">
+          <div class="history-header">
+            <h2>Gyro Debug Render</h2>
+            <button id="debug-reset-reference-btn">Reset Debug Reference</button>
+          </div>
+          <p class="meta-line">Live test render for gyro mapping changes.</p>
+          <div id="debug-cube-viewport" class="cube-viewport debug-cube-viewport"></div>
+        </section>
+
+        <section class="card">
+          <h2>Gyro Debug Controls</h2>
+          <div class="workflow-grid">
+            <label class="toggle-label" for="debug-enable-sync-checkbox">
+              <input id="debug-enable-sync-checkbox" type="checkbox" checked />
+              Debug render orientation sync
+            </label>
+            <label class="toggle-label" for="debug-use-calibration-checkbox">
+              <input id="debug-use-calibration-checkbox" type="checkbox" checked />
+              Apply saved calibration
+            </label>
+            <label class="toggle-label" for="debug-invert-gyro-checkbox">
+              <input id="debug-invert-gyro-checkbox" type="checkbox" />
+              Invert gyro quaternion
+            </label>
+            <label class="field-label">
+              Delta order
+              <select id="debug-delta-order-select">
+                <option value="sensor_ref" selected>sensor * inverse(reference)</option>
+                <option value="ref_sensor">inverse(reference) * sensor</option>
+              </select>
+            </label>
+            <label class="field-label">
+              Frame preset
+              <select id="debug-frame-preset-select">
+                <option value="none" selected>None</option>
+                <option value="x90">Rotate +90° X</option>
+                <option value="x-90">Rotate -90° X</option>
+                <option value="y90">Rotate +90° Y</option>
+                <option value="y-90">Rotate -90° Y</option>
+                <option value="z90">Rotate +90° Z</option>
+                <option value="z-90">Rotate -90° Z</option>
+                <option value="x180">Rotate 180° X</option>
+                <option value="y180">Rotate 180° Y</option>
+                <option value="z180">Rotate 180° Z</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Gyro Data</h2>
+          <p id="debug-gyro-status" class="meta-line">No gyro samples yet.</p>
+          <p class="meta-line">Samples: <strong id="debug-gyro-sample-count">0</strong></p>
+          <p class="meta-line">Last event: <strong id="debug-last-event-age">never</strong></p>
+          <div class="debug-grid">
+            <div>
+              <p class="meta-line">Raw quaternion</p>
+              <pre id="debug-raw-quaternion" class="debug-code">-</pre>
+            </div>
+            <div>
+              <p class="meta-line">Post calibration/toggles quaternion</p>
+              <pre id="debug-final-quaternion" class="debug-code">-</pre>
+            </div>
+            <div>
+              <p class="meta-line">Raw up-vector</p>
+              <pre id="debug-raw-up" class="debug-code">-</pre>
+            </div>
+            <div>
+              <p class="meta-line">Final up-vector</p>
+              <pre id="debug-final-up" class="debug-code">-</pre>
+            </div>
+          </div>
         </section>
       </section>
 

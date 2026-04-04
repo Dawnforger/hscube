@@ -50,6 +50,10 @@ const CFOP_PHASES = ["Cross/F2L", "OLL", "PLL"];
 const ROUX_PHASES = ["FB/SB", "CMLL", "LSE"];
 const LBL_PHASES = ["First Layer", "Second Layer", "Last Layer"];
 const SOLVED_FACELETS = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
+const DEBUG_DELTA_ORDER = {
+  SENSOR_REF: "sensor_ref",
+  REF_SENSOR: "ref_sensor",
+};
 
 const elements = {
   menuToggleBtn: document.querySelector("#menu-toggle-btn"),
@@ -59,11 +63,13 @@ const elements = {
   navSolveBtn: document.querySelector("#nav-solve-btn"),
   navRecordsBtn: document.querySelector("#nav-records-btn"),
   navCalibrationBtn: document.querySelector("#nav-calibration-btn"),
+  navDebugBtn: document.querySelector("#nav-debug-btn"),
   navUpdatesBtn: document.querySelector("#nav-updates-btn"),
   pairingScreen: document.querySelector("#pairing-screen"),
   solveScreen: document.querySelector("#solve-screen"),
   recordsScreen: document.querySelector("#records-screen"),
   calibrationScreen: document.querySelector("#calibration-screen"),
+  debugScreen: document.querySelector("#debug-screen"),
   updatesScreen: document.querySelector("#updates-screen"),
   connectBtn: document.querySelector("#connect-btn"),
   disconnectBtn: document.querySelector("#disconnect-btn"),
@@ -113,6 +119,20 @@ const elements = {
   captureOrientationCalibrationBtn: document.querySelector("#capture-orientation-calibration-btn"),
   resetOrientationCalibrationBtn: document.querySelector("#reset-orientation-calibration-btn"),
   orientationCalibrationStatus: document.querySelector("#orientation-calibration-status"),
+  debugCubeViewport: document.querySelector("#debug-cube-viewport"),
+  debugEnableSyncCheckbox: document.querySelector("#debug-enable-sync-checkbox"),
+  debugUseCalibrationCheckbox: document.querySelector("#debug-use-calibration-checkbox"),
+  debugInvertGyroCheckbox: document.querySelector("#debug-invert-gyro-checkbox"),
+  debugDeltaOrderSelect: document.querySelector("#debug-delta-order-select"),
+  debugFramePresetSelect: document.querySelector("#debug-frame-preset-select"),
+  debugResetReferenceBtn: document.querySelector("#debug-reset-reference-btn"),
+  debugGyroStatus: document.querySelector("#debug-gyro-status"),
+  debugGyroSampleCount: document.querySelector("#debug-gyro-sample-count"),
+  debugLastEventAge: document.querySelector("#debug-last-event-age"),
+  debugRawQuaternion: document.querySelector("#debug-raw-quaternion"),
+  debugFinalQuaternion: document.querySelector("#debug-final-quaternion"),
+  debugRawUp: document.querySelector("#debug-raw-up"),
+  debugFinalUp: document.querySelector("#debug-final-up"),
 };
 
 let cubeConnection = null;
@@ -140,6 +160,14 @@ let latestGyroQuaternion = null;
 let recentGyroSamples = [];
 let orientationCalibrationCorrection = identityQuaternion();
 let orientationCalibrationSession = null;
+let debugCubeRenderer = null;
+let debugRendererSyncEnabled = true;
+let debugUseCalibration = true;
+let debugInvertGyro = false;
+let debugDeltaOrder = DEBUG_DELTA_ORDER.SENSOR_REF;
+let debugFramePreset = "none";
+let debugGyroSampleCount = 0;
+let debugLastGyroEventAt = null;
 
 let workflowPhase = WORKFLOW_PHASE.IDLE;
 let scrambleMode = SCRAMBLE_MODE.ALG;
@@ -167,6 +195,7 @@ elements.navPairingBtn.addEventListener("click", () => switchScreen("pairing"));
 elements.navSolveBtn.addEventListener("click", () => switchScreen("solve"));
 elements.navRecordsBtn.addEventListener("click", () => switchScreen("records"));
 elements.navCalibrationBtn.addEventListener("click", () => switchScreen("calibration"));
+elements.navDebugBtn.addEventListener("click", () => switchScreen("debug"));
 elements.navUpdatesBtn.addEventListener("click", () => switchScreen("updates"));
 elements.resetCubeSyncBtn.addEventListener("click", () => {
   void resetCubeData();
@@ -197,6 +226,12 @@ elements.startOrientationCalibrationBtn.addEventListener("click", startOrientati
 elements.captureOrientationCalibrationBtn.addEventListener("click", captureOrientationCalibrationFace);
 elements.resetOrientationCalibrationBtn.addEventListener("click", resetOrientationCalibration);
 elements.closeAnalysisBtn.addEventListener("click", closeSolveAnalysis);
+elements.debugEnableSyncCheckbox.addEventListener("change", onDebugControlsChanged);
+elements.debugUseCalibrationCheckbox.addEventListener("change", onDebugControlsChanged);
+elements.debugInvertGyroCheckbox.addEventListener("change", onDebugControlsChanged);
+elements.debugDeltaOrderSelect.addEventListener("change", onDebugControlsChanged);
+elements.debugFramePresetSelect.addEventListener("change", onDebugControlsChanged);
+elements.debugResetReferenceBtn.addEventListener("click", resetDebugOrientationReferences);
 
 document.addEventListener("keydown", (event) => {
   if (event.code !== "Space" || event.repeat) {
@@ -222,7 +257,12 @@ async function bootstrap() {
   switchScreen("solve");
   cubeRenderer = createCubeRenderer(elements.cubeViewport);
   cubeRenderer.updateFromFacelets(currentFacelets);
+  debugCubeRenderer = createCubeRenderer(elements.debugCubeViewport);
+  debugCubeRenderer.updateFromFacelets(currentFacelets);
   orientationCalibrationCorrection = loadOrientationCalibrationCorrection();
+  syncDebugControlsToUi();
+  applyDebugControlState();
+  renderDebugGyroData(null, null);
   applyOrientationSyncPreference(loadOrientationSyncPreference(), { persist: false });
   setCubeSyncStatus("Waiting for cube state...");
   renderTimer();
@@ -264,6 +304,7 @@ async function bootstrap() {
 
 window.addEventListener("beforeunload", () => {
   cubeRenderer?.destroy();
+  debugCubeRenderer?.destroy();
 });
 
 async function onConnectClick() {
@@ -321,6 +362,7 @@ async function connectToCube(options = {}) {
     recentGyroSamples = [];
     orientationCalibrationSession = null;
     cubeRenderer?.resetOrientationSyncReference();
+    debugCubeRenderer?.resetOrientationSyncReference();
     rememberConnectedCube(connection);
     await connection.sendCubeCommand({ type: "REQUEST_FACELETS" });
     await connection.sendCubeCommand({ type: "REQUEST_HARDWARE" }).catch(() => undefined);
@@ -389,6 +431,10 @@ async function disconnectCube(options = {}) {
   recentGyroSamples = [];
   orientationCalibrationSession = null;
   cubeRenderer?.resetOrientationSyncReference();
+  debugCubeRenderer?.resetOrientationSyncReference();
+  debugGyroSampleCount = 0;
+  debugLastGyroEventAt = null;
+  renderDebugGyroData(null, null);
   updateOrientationSyncStatus();
   updateOrientationCalibrationStatus();
 
@@ -434,6 +480,7 @@ async function onGanCubeEvent(event) {
   currentCubeSolved = isFaceletsSolved(event.facelets);
   currentFacelets = event.facelets;
   cubeRenderer?.updateFromFacelets(currentFacelets);
+  debugCubeRenderer?.updateFromFacelets(currentFacelets);
   captureSolveFaceletsEvent(currentFacelets, event.timestamp);
   setCubeSyncStatus(currentCubeSolved ? "Cube is solved." : "Cube state in sync.");
 
@@ -761,6 +808,7 @@ function switchScreen(screen) {
   activeScreen =
     screen === "pairing" ||
     screen === "records" ||
+    screen === "debug" ||
     screen === "updates" ||
     screen === "calibration"
       ? screen
@@ -770,16 +818,19 @@ function switchScreen(screen) {
   const solveActive = activeScreen === "solve";
   const recordsActive = activeScreen === "records";
   const calibrationActive = activeScreen === "calibration";
+  const debugActive = activeScreen === "debug";
   const updatesActive = activeScreen === "updates";
   elements.pairingScreen.classList.toggle("active", pairingActive);
   elements.solveScreen.classList.toggle("active", solveActive);
   elements.recordsScreen.classList.toggle("active", recordsActive);
   elements.calibrationScreen.classList.toggle("active", calibrationActive);
+  elements.debugScreen.classList.toggle("active", debugActive);
   elements.updatesScreen.classList.toggle("active", updatesActive);
   elements.navPairingBtn.classList.toggle("active", pairingActive);
   elements.navSolveBtn.classList.toggle("active", solveActive);
   elements.navRecordsBtn.classList.toggle("active", recordsActive);
   elements.navCalibrationBtn.classList.toggle("active", calibrationActive);
+  elements.navDebugBtn.classList.toggle("active", debugActive);
   elements.navUpdatesBtn.classList.toggle("active", updatesActive);
   if (!recordsActive) {
     closeSolveAnalysis();
@@ -2279,6 +2330,7 @@ function onHardwareEvent(event) {
   }
   updateOrientationSyncStatus();
   updateOrientationCalibrationStatus();
+  updateDebugGyroStatus();
 }
 
 function onGyroEvent(event) {
@@ -2295,15 +2347,9 @@ function onGyroEvent(event) {
   if (recentGyroSamples.length > 240) {
     recentGyroSamples.splice(0, recentGyroSamples.length - 240);
   }
-  if (!orientationSyncEnabled) {
-    return;
-  }
-  const corrected = applyCalibrationToQuaternion(latestGyroQuaternion);
-  const applied = cubeRenderer?.syncOrientationToQuaternion(corrected);
-  if (applied) {
-    receivedOrientationSample = true;
-    updateOrientationSyncStatus();
-  }
+  debugGyroSampleCount += 1;
+  debugLastGyroEventAt = Date.now();
+  processGyroSample(latestGyroQuaternion);
 }
 
 function applyOrientationSyncPreference(enabled, options = {}) {
@@ -2316,6 +2362,182 @@ function applyOrientationSyncPreference(enabled, options = {}) {
     persistOrientationSyncPreference(orientationSyncEnabled);
   }
   updateOrientationSyncStatus();
+}
+
+function onDebugControlsChanged() {
+  debugRendererSyncEnabled = elements.debugEnableSyncCheckbox.checked;
+  debugUseCalibration = elements.debugUseCalibrationCheckbox.checked;
+  debugInvertGyro = elements.debugInvertGyroCheckbox.checked;
+  debugDeltaOrder =
+    elements.debugDeltaOrderSelect.value === DEBUG_DELTA_ORDER.REF_SENSOR
+      ? DEBUG_DELTA_ORDER.REF_SENSOR
+      : DEBUG_DELTA_ORDER.SENSOR_REF;
+  debugFramePreset = elements.debugFramePresetSelect.value || "none";
+
+  applyDebugControlState();
+
+  if (latestGyroQuaternion) {
+    processGyroSample(latestGyroQuaternion);
+  } else {
+    updateDebugGyroStatus();
+  }
+}
+
+function syncDebugControlsToUi() {
+  elements.debugEnableSyncCheckbox.checked = debugRendererSyncEnabled;
+  elements.debugUseCalibrationCheckbox.checked = debugUseCalibration;
+  elements.debugInvertGyroCheckbox.checked = debugInvertGyro;
+  elements.debugDeltaOrderSelect.value = debugDeltaOrder;
+  elements.debugFramePresetSelect.value = debugFramePreset;
+}
+
+function applyDebugControlState() {
+  cubeRenderer?.setSensorDeltaOrder(debugDeltaOrder);
+  debugCubeRenderer?.setSensorDeltaOrder(debugDeltaOrder);
+  debugCubeRenderer?.setOrientationSyncEnabled(debugRendererSyncEnabled);
+  resetDebugOrientationReferences();
+  updateDebugGyroStatus();
+}
+
+function resetDebugOrientationReferences() {
+  cubeRenderer?.resetOrientationSyncReference();
+  debugCubeRenderer?.resetOrientationSyncReference();
+  receivedOrientationSample = false;
+  updateOrientationSyncStatus();
+}
+
+function processGyroSample(rawQuaternion) {
+  const raw = normalizeQuaternion(rawQuaternion);
+  if (!raw) {
+    return;
+  }
+  const finalQuaternion = buildFinalGyroQuaternion(raw);
+  if (!finalQuaternion) {
+    renderDebugGyroData(raw, null);
+    return;
+  }
+
+  let mainApplied = false;
+  if (orientationSyncEnabled) {
+    mainApplied = Boolean(cubeRenderer?.syncOrientationToQuaternion(finalQuaternion));
+  }
+  if (mainApplied) {
+    receivedOrientationSample = true;
+    updateOrientationSyncStatus();
+  }
+
+  let debugApplied = false;
+  if (debugRendererSyncEnabled) {
+    debugApplied = Boolean(debugCubeRenderer?.syncOrientationToQuaternion(finalQuaternion));
+  }
+
+  renderDebugGyroData(raw, finalQuaternion, { mainApplied, debugApplied });
+}
+
+function buildFinalGyroQuaternion(rawQuaternion) {
+  let transformed = normalizeQuaternion(rawQuaternion);
+  if (!transformed) {
+    return null;
+  }
+  if (debugInvertGyro) {
+    transformed = invertQuaternion(transformed);
+  }
+  transformed = applyDebugFramePreset(transformed, debugFramePreset);
+  if (debugUseCalibration) {
+    transformed = applyCalibrationToQuaternion(transformed);
+  }
+  return normalizeQuaternion(transformed);
+}
+
+function applyDebugFramePreset(quaternion, preset) {
+  const base = normalizeQuaternion(quaternion);
+  if (!base) {
+    return null;
+  }
+  const transform = getDebugPresetQuaternion(preset);
+  if (!transform) {
+    return base;
+  }
+  return multiplyQuaternions(transform, base);
+}
+
+function getDebugPresetQuaternion(preset) {
+  switch (preset) {
+    case "x90":
+      return quaternionFromAxisAngle({ x: 1, y: 0, z: 0 }, Math.PI / 2);
+    case "x-90":
+      return quaternionFromAxisAngle({ x: 1, y: 0, z: 0 }, -Math.PI / 2);
+    case "y90":
+      return quaternionFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 2);
+    case "y-90":
+      return quaternionFromAxisAngle({ x: 0, y: 1, z: 0 }, -Math.PI / 2);
+    case "z90":
+      return quaternionFromAxisAngle({ x: 0, y: 0, z: 1 }, Math.PI / 2);
+    case "z-90":
+      return quaternionFromAxisAngle({ x: 0, y: 0, z: 1 }, -Math.PI / 2);
+    case "x180":
+      return quaternionFromAxisAngle({ x: 1, y: 0, z: 0 }, Math.PI);
+    case "y180":
+      return quaternionFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI);
+    case "z180":
+      return quaternionFromAxisAngle({ x: 0, y: 0, z: 1 }, Math.PI);
+    case "none":
+    default:
+      return null;
+  }
+}
+
+function updateDebugGyroStatus() {
+  if (!cubeConnection) {
+    elements.debugGyroStatus.textContent = "Debug: connect cube to inspect gyro stream.";
+    return;
+  }
+  if (orientationSupportedByCube === false) {
+    elements.debugGyroStatus.textContent = "Debug: cube reports no orientation support.";
+    return;
+  }
+  if (!latestGyroQuaternion) {
+    elements.debugGyroStatus.textContent = "Debug: waiting for gyro samples...";
+    return;
+  }
+  elements.debugGyroStatus.textContent = debugRendererSyncEnabled
+    ? "Debug: streaming gyro samples to debug render."
+    : "Debug: samples received (debug render sync disabled).";
+}
+
+function renderDebugGyroData(rawQuaternion, finalQuaternion, meta = {}) {
+  elements.debugGyroSampleCount.textContent = String(debugGyroSampleCount);
+  elements.debugLastEventAge.textContent = debugLastGyroEventAt
+    ? new Date(debugLastGyroEventAt).toLocaleTimeString()
+    : "never";
+  elements.debugRawQuaternion.textContent = formatQuaternion(rawQuaternion);
+  elements.debugFinalQuaternion.textContent = formatQuaternion(finalQuaternion);
+  elements.debugRawUp.textContent = formatVector3(
+    rawQuaternion ? rotateVectorByQuaternion({ x: 0, y: 0, z: 1 }, rawQuaternion) : null,
+  );
+  elements.debugFinalUp.textContent = formatVector3(
+    finalQuaternion ? rotateVectorByQuaternion({ x: 0, y: 0, z: 1 }, finalQuaternion) : null,
+  );
+  updateDebugGyroStatus();
+  if (meta.mainApplied || meta.debugApplied) {
+    elements.debugGyroStatus.textContent += ` (main:${meta.mainApplied ? "on" : "off"} debug:${meta.debugApplied ? "on" : "off"})`;
+  }
+}
+
+function formatQuaternion(quaternion) {
+  const q = normalizeQuaternion(quaternion);
+  if (!q) {
+    return "-";
+  }
+  return `x:${q.x.toFixed(4)} y:${q.y.toFixed(4)} z:${q.z.toFixed(4)} w:${q.w.toFixed(4)}`;
+}
+
+function formatVector3(vector) {
+  const v = normalizeVector3(vector);
+  if (!v) {
+    return "-";
+  }
+  return `x:${v.x.toFixed(4)} y:${v.y.toFixed(4)} z:${v.z.toFixed(4)}`;
 }
 
 function updateOrientationSyncStatus() {
@@ -2594,6 +2816,22 @@ function multiplyQuaternions(left, right) {
     x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
     y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
     z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+  });
+}
+
+function quaternionFromAxisAngle(axis, angleRad) {
+  const normalizedAxis = normalizeVector3(axis);
+  if (!normalizedAxis || !Number.isFinite(angleRad)) {
+    return null;
+  }
+  const half = angleRad / 2;
+  const sinHalf = Math.sin(half);
+  const cosHalf = Math.cos(half);
+  return normalizeQuaternion({
+    x: normalizedAxis.x * sinHalf,
+    y: normalizedAxis.y * sinHalf,
+    z: normalizedAxis.z * sinHalf,
+    w: cosHalf,
   });
 }
 

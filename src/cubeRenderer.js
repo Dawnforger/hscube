@@ -52,6 +52,7 @@ export function createCubeRenderer(container) {
   let orientationSyncEnabled = false;
   let referenceSensorQuaternion = null;
   let referenceRenderQuaternion = null;
+  let sensorDeltaOrder = "sensor_ref";
 
   renderRotation();
 
@@ -137,6 +138,11 @@ export function createCubeRenderer(container) {
         renderRotation();
       }
     },
+    setSensorDeltaOrder(order) {
+      sensorDeltaOrder = order === "ref_sensor" ? "ref_sensor" : "sensor_ref";
+      referenceSensorQuaternion = null;
+      referenceRenderQuaternion = null;
+    },
     resetOrientationSyncReference() {
       referenceSensorQuaternion = null;
       referenceRenderQuaternion = null;
@@ -155,10 +161,11 @@ export function createCubeRenderer(container) {
         referenceRenderQuaternion = eulerToQuaternion(rotX, rotY);
       }
 
-      const sensorDelta = multiplyQuaternions(
-        normalized,
-        invertQuaternion(referenceSensorQuaternion),
-      );
+      const referenceInverse = invertQuaternion(referenceSensorQuaternion);
+      const sensorDelta =
+        sensorDeltaOrder === "ref_sensor"
+          ? multiplyQuaternions(referenceInverse, normalized)
+          : multiplyQuaternions(normalized, referenceInverse);
       const target = multiplyQuaternions(sensorDelta, referenceRenderQuaternion);
       renderQuaternion(target);
       return true;
