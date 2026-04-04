@@ -1,213 +1,292 @@
-import * as THREE from "three";
-
 const FACE_COLORS = {
-  U: 0xffffff,
-  R: 0xff5555,
-  F: 0x00a86b,
-  D: 0xffd33d,
-  L: 0xff8c42,
-  B: 0x4f74ff,
+  U: "#f7f9fb",
+  R: "#ff5555",
+  F: "#00a86b",
+  D: "#ffd33d",
+  L: "#ff8c42",
+  B: "#4f74ff",
 };
 
 const FACE_ORDER = ["U", "R", "F", "D", "L", "B"];
+const SOLVED_FACELETS = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
+const ROTATE_SPEED = 0.34;
+const MAX_TILT = 78;
+const EPSILON = 1e-8;
 
 export function createCubeRenderer(container) {
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x1b2334);
+  const root = document.createElement("div");
+  root.className = "cube3d-root";
 
-  const camera = new THREE.PerspectiveCamera(
-    45,
-    container.clientWidth / Math.max(container.clientHeight, 1),
-    0.1,
-    100,
-  );
-  camera.position.set(3.4, 3.0, 4.0);
-  camera.lookAt(0, 0, 0);
+  const scene = document.createElement("div");
+  scene.className = "cube3d-scene";
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  // Stickers use MeshBasicMaterial; lighter mapping keeps plastics vivid on all GPUs.
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.25;
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.setSize(container.clientWidth, container.clientHeight);
-  container.replaceChildren(renderer.domElement);
+  const cube = document.createElement("div");
+  cube.className = "cube3d";
+  scene.append(cube);
+  root.append(scene);
 
-  const canvas = renderer.domElement;
-  canvas.style.touchAction = "none";
-  canvas.style.cursor = "grab";
+  const stickers = new Map();
+  for (const face of FACE_ORDER) {
+    const faceElement = document.createElement("section");
+    faceElement.className = `cube3d-face cube3d-face-${face.toLowerCase()}`;
+    faceElement.setAttribute("aria-label", `${face} face`);
 
-  const ambient = new THREE.AmbientLight(0xffffff, 1.15);
-  scene.add(ambient);
-  const dir = new THREE.DirectionalLight(0xffffff, 1.05);
-  dir.position.set(5, 8, 6);
-  scene.add(dir);
-  const fill = new THREE.DirectionalLight(0xcfe0ff, 0.55);
-  fill.position.set(-4, 2, -3);
-  scene.add(fill);
+    for (let stickerIndex = 0; stickerIndex < 9; stickerIndex += 1) {
+      const sticker = document.createElement("div");
+      sticker.className = "cube3d-sticker";
+      faceElement.append(sticker);
+      stickers.set(`${face}${stickerIndex}`, sticker);
+    }
 
-  const root = new THREE.Group();
-  scene.add(root);
+    cube.append(faceElement);
+  }
 
-  const stickerMeshes = new Map();
-  buildCube(root, stickerMeshes);
+  container.replaceChildren(root);
+  applyFacelets(stickers, SOLVED_FACELETS);
 
-  root.rotation.x = -0.52;
-  root.rotation.y = 0.69;
-
-  const ROTATE_SPEED = 0.0055;
-  const tiltLimit = Math.PI / 2 - 0.12;
-  let dragPointerId = null;
+  let rotX = -24;
+  let rotY = -36;
+  let pointerId = null;
   let lastX = 0;
   let lastY = 0;
+  let orientationSyncEnabled = false;
+  let referenceSensorQuaternion = null;
+  let referenceRenderQuaternion = null;
+  let sensorDeltaOrder = "sensor_ref";
+
+  renderRotation();
 
   const onPointerDown = (event) => {
+    if (orientationSyncEnabled) {
+      return;
+    }
     if (event.pointerType === "mouse" && event.button !== 0) {
       return;
     }
-    dragPointerId = event.pointerId;
+    pointerId = event.pointerId;
     lastX = event.clientX;
     lastY = event.clientY;
-    canvas.setPointerCapture(event.pointerId);
-    canvas.style.cursor = "grabbing";
+    scene.setPointerCapture(event.pointerId);
+    scene.classList.add("dragging");
   };
 
   const onPointerMove = (event) => {
-    if (dragPointerId !== event.pointerId) {
+    if (orientationSyncEnabled) {
+      return;
+    }
+    if (pointerId !== event.pointerId) {
       return;
     }
     const dx = event.clientX - lastX;
     const dy = event.clientY - lastY;
     lastX = event.clientX;
     lastY = event.clientY;
-    root.rotation.y += dx * ROTATE_SPEED;
-    root.rotation.x += dy * ROTATE_SPEED;
-    root.rotation.x = Math.max(-tiltLimit, Math.min(tiltLimit, root.rotation.x));
+
+    rotY += dx * ROTATE_SPEED;
+    rotX -= dy * ROTATE_SPEED;
+    rotX = Math.max(-MAX_TILT, Math.min(MAX_TILT, rotX));
+    renderRotation();
   };
 
   const endDrag = (event) => {
-    if (dragPointerId !== event.pointerId) {
+    if (orientationSyncEnabled) {
       return;
     }
-    dragPointerId = null;
-    canvas.releasePointerCapture(event.pointerId);
-    canvas.style.cursor = "grab";
-  };
-
-  canvas.addEventListener("pointerdown", onPointerDown);
-  canvas.addEventListener("pointermove", onPointerMove);
-  canvas.addEventListener("pointerup", endDrag);
-  canvas.addEventListener("pointercancel", endDrag);
-
-  let raf = null;
-  let alive = true;
-  const animate = () => {
-    if (!alive) {
+    if (pointerId !== event.pointerId) {
       return;
     }
-    renderer.render(scene, camera);
-    raf = requestAnimationFrame(animate);
+    pointerId = null;
+    scene.releasePointerCapture(event.pointerId);
+    scene.classList.remove("dragging");
   };
-  animate();
 
+  scene.addEventListener("pointerdown", onPointerDown);
+  scene.addEventListener("pointermove", onPointerMove);
+  scene.addEventListener("pointerup", endDrag);
+  scene.addEventListener("pointercancel", endDrag);
+
+  let rafId = null;
   const resizeObserver = new ResizeObserver(() => {
-    const width = Math.max(1, container.clientWidth);
-    const height = Math.max(1, container.clientHeight);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-    renderer.setSize(width, height);
+    applyCubeSize();
   });
-  resizeObserver.observe(container);
-
-  applyFacelets(stickerMeshes, "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB");
+  resizeObserver.observe(scene);
+  applyCubeSize();
 
   return {
     updateFromFacelets(facelets) {
-      applyFacelets(stickerMeshes, facelets);
+      applyFacelets(stickers, facelets);
+    },
+    setOrientationSyncEnabled(enabled) {
+      const nextEnabled = Boolean(enabled);
+      if (orientationSyncEnabled === nextEnabled) {
+        return;
+      }
+      if (nextEnabled && pointerId !== null) {
+        try {
+          scene.releasePointerCapture(pointerId);
+        } catch {
+          // Pointer may already be released; ignore.
+        }
+        pointerId = null;
+        scene.classList.remove("dragging");
+      }
+      orientationSyncEnabled = nextEnabled;
+      referenceSensorQuaternion = null;
+      referenceRenderQuaternion = null;
+      scene.classList.toggle("sync-enabled", orientationSyncEnabled);
+      if (!orientationSyncEnabled) {
+        renderRotation();
+      }
+    },
+    setSensorDeltaOrder(order) {
+      sensorDeltaOrder = order === "ref_sensor" ? "ref_sensor" : "sensor_ref";
+      referenceSensorQuaternion = null;
+      referenceRenderQuaternion = null;
+    },
+    resetOrientationSyncReference() {
+      referenceSensorQuaternion = null;
+      referenceRenderQuaternion = null;
+    },
+    syncOrientationToQuaternion(quaternion) {
+      if (!orientationSyncEnabled) {
+        return false;
+      }
+      const normalized = normalizeQuaternion(quaternion);
+      if (!normalized) {
+        return false;
+      }
+
+      if (!referenceSensorQuaternion) {
+        referenceSensorQuaternion = normalized;
+        referenceRenderQuaternion = eulerToQuaternion(rotX, rotY);
+      }
+
+      const referenceInverse = invertQuaternion(referenceSensorQuaternion);
+      const sensorDelta =
+        sensorDeltaOrder === "ref_sensor"
+          ? multiplyQuaternions(referenceInverse, normalized)
+          : multiplyQuaternions(normalized, referenceInverse);
+      const target = multiplyQuaternions(sensorDelta, referenceRenderQuaternion);
+      renderQuaternion(target);
+      return true;
     },
     destroy() {
-      alive = false;
-      canvas.removeEventListener("pointerdown", onPointerDown);
-      canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerup", endDrag);
-      canvas.removeEventListener("pointercancel", endDrag);
-      if (raf) {
-        cancelAnimationFrame(raf);
+      scene.removeEventListener("pointerdown", onPointerDown);
+      scene.removeEventListener("pointermove", onPointerMove);
+      scene.removeEventListener("pointerup", endDrag);
+      scene.removeEventListener("pointercancel", endDrag);
+      if (rafId) {
+        cancelAnimationFrame(rafId);
       }
       resizeObserver.disconnect();
-      renderer.dispose();
+      container.replaceChildren();
     },
+  };
+
+  function renderRotation() {
+    cube.style.transform = `rotateX(${rotX}deg) rotateY(${rotY}deg)`;
+  }
+
+  function renderQuaternion(quaternion) {
+    const normalized = normalizeQuaternion(quaternion);
+    if (!normalized) {
+      return;
+    }
+    const clampedW = Math.max(-1, Math.min(1, normalized.w));
+    const angle = 2 * Math.acos(clampedW);
+    const axisFactor = Math.sqrt(Math.max(0, 1 - clampedW * clampedW));
+    if (axisFactor < EPSILON) {
+      cube.style.transform = "rotate3d(0, 0, 1, 0rad)";
+      return;
+    }
+    const axisX = normalized.x / axisFactor;
+    const axisY = normalized.y / axisFactor;
+    const axisZ = normalized.z / axisFactor;
+    cube.style.transform = `rotate3d(${axisX}, ${axisY}, ${axisZ}, ${angle}rad)`;
+  }
+
+  function applyCubeSize() {
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+    }
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      const width = Math.max(1, scene.clientWidth);
+      const height = Math.max(1, scene.clientHeight);
+      const base = Math.min(width, height);
+      // Scale below the full box so projected corners stay inside viewport.
+      const cubeSize = Math.max(96, Math.min(170, Math.floor(base * 0.54)));
+      cube.style.setProperty("--cube-size", `${cubeSize}px`);
+    });
+  }
+}
+
+function normalizeQuaternion(quaternion) {
+  if (!quaternion || typeof quaternion !== "object") {
+    return null;
+  }
+  const x = Number(quaternion.x);
+  const y = Number(quaternion.y);
+  const z = Number(quaternion.z);
+  const w = Number(quaternion.w);
+  if (![x, y, z, w].every((value) => Number.isFinite(value))) {
+    return null;
+  }
+  const magnitude = Math.hypot(x, y, z, w);
+  if (magnitude < EPSILON) {
+    return null;
+  }
+  return {
+    x: x / magnitude,
+    y: y / magnitude,
+    z: z / magnitude,
+    w: w / magnitude,
   };
 }
 
-function buildCube(root, stickerMeshes) {
-  const spacing = 0.68;
-  const size = 0.6;
-  const planeOffset = 1.04;
-  // BasicMaterial: sticker colors stay correct regardless of lighting / tone mapping.
-  const defaultMaterial = new THREE.MeshBasicMaterial({ color: 0x8892a8 });
-
-  const body = new THREE.Mesh(
-    new THREE.BoxGeometry(2.2, 2.2, 2.2),
-    new THREE.MeshStandardMaterial({
-      color: 0x202735,
-      roughness: 0.76,
-      metalness: 0.02,
-    }),
-  );
-  root.add(body);
-
-  for (const face of FACE_ORDER) {
-    for (let row = 0; row < 3; row += 1) {
-      for (let col = 0; col < 3; col += 1) {
-        const key = `${face}${row}${col}`;
-        const plane = new THREE.Mesh(
-          new THREE.PlaneGeometry(size, size),
-          defaultMaterial.clone(),
-        );
-
-        placeSticker(plane, face, row, col, spacing, planeOffset);
-        root.add(plane);
-        stickerMeshes.set(key, plane);
-      }
-    }
+function multiplyQuaternions(left, right) {
+  const a = normalizeQuaternion(left);
+  const b = normalizeQuaternion(right);
+  if (!a || !b) {
+    return { x: 0, y: 0, z: 0, w: 1 };
   }
+  return normalizeQuaternion({
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+  });
 }
 
-function placeSticker(mesh, face, row, col, spacing, offset) {
-  const x = (col - 1) * spacing;
-  const y = (1 - row) * spacing;
-
-  switch (face) {
-    case "U":
-      mesh.position.set(x, offset, -y);
-      mesh.rotation.x = -Math.PI / 2;
-      break;
-    case "D":
-      mesh.position.set(x, -offset, y);
-      mesh.rotation.x = Math.PI / 2;
-      break;
-    case "F":
-      mesh.position.set(x, y, offset);
-      break;
-    case "B":
-      mesh.position.set(-x, y, -offset);
-      mesh.rotation.y = Math.PI;
-      break;
-    case "R":
-      mesh.position.set(offset, y, -x);
-      mesh.rotation.y = -Math.PI / 2;
-      break;
-    case "L":
-      mesh.position.set(-offset, y, x);
-      mesh.rotation.y = Math.PI / 2;
-      break;
-    default:
-      break;
+function invertQuaternion(quaternion) {
+  const normalized = normalizeQuaternion(quaternion);
+  if (!normalized) {
+    return { x: 0, y: 0, z: 0, w: 1 };
   }
+  return {
+    x: -normalized.x,
+    y: -normalized.y,
+    z: -normalized.z,
+    w: normalized.w,
+  };
 }
 
-function applyFacelets(stickerMeshes, facelets) {
+function eulerToQuaternion(rotXDeg, rotYDeg) {
+  const halfX = (rotXDeg * Math.PI) / 360;
+  const halfY = (rotYDeg * Math.PI) / 360;
+  const sinX = Math.sin(halfX);
+  const cosX = Math.cos(halfX);
+  const sinY = Math.sin(halfY);
+  const cosY = Math.cos(halfY);
+  return normalizeQuaternion({
+    w: cosX * cosY,
+    x: sinX * cosY,
+    y: cosX * sinY,
+    z: -sinX * sinY,
+  });
+}
+
+function applyFacelets(stickers, facelets) {
   if (typeof facelets !== "string" || facelets.length < 54) {
     return;
   }
@@ -215,16 +294,13 @@ function applyFacelets(stickerMeshes, facelets) {
   for (let faceIndex = 0; faceIndex < FACE_ORDER.length; faceIndex += 1) {
     const face = FACE_ORDER[faceIndex];
     for (let sticker = 0; sticker < 9; sticker += 1) {
-      const row = Math.floor(sticker / 3);
-      const col = sticker % 3;
-      const key = `${face}${row}${col}`;
-      const mesh = stickerMeshes.get(key);
-      if (!mesh) {
+      const key = `${face}${sticker}`;
+      const stickerElement = stickers.get(key);
+      if (!stickerElement) {
         continue;
       }
-
       const colorKey = facelets[faceIndex * 9 + sticker];
-      mesh.material.color.setHex(FACE_COLORS[colorKey] ?? 0x3b414f);
+      stickerElement.style.backgroundColor = FACE_COLORS[colorKey] ?? "#3b414f";
     }
   }
 }

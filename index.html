@@ -3,15 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>GAN Smartcube Lite</title>
+    <title>HS Cube</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <div id="drawer-backdrop" class="drawer-backdrop hidden"></div>
     <aside id="side-drawer" class="side-drawer">
       <p class="drawer-title">Navigation</p>
+      <button id="nav-pairing-btn" class="drawer-link">Pairing</button>
       <button id="nav-solve-btn" class="drawer-link active">Solve</button>
       <button id="nav-records-btn" class="drawer-link">Records</button>
+      <button id="nav-calibration-btn" class="drawer-link">Calibration</button>
+      <button id="nav-debug-btn" class="drawer-link">Debug</button>
+      <button id="nav-updates-btn" class="drawer-link">Updates</button>
     </aside>
 
     <main class="app">
@@ -19,14 +23,14 @@
         <div class="header-row">
           <button id="menu-toggle-btn" class="menu-toggle">☰</button>
           <div>
-            <h1>GAN Smartcube Lite</h1>
+            <h1>HS Cube</h1>
             <p class="subtitle">Timer + GAN i3 Bluetooth + solve history</p>
             <p class="meta-line">App version: <strong id="app-version">-</strong></p>
           </div>
         </div>
       </header>
 
-      <section id="solve-screen" class="screen active">
+      <section id="pairing-screen" class="screen">
         <section class="card connection-card">
           <h2>Bluetooth</h2>
           <div class="connection-controls">
@@ -34,25 +38,46 @@
             <button id="disconnect-btn" disabled>Disconnect</button>
           </div>
           <p id="connection-status">Not connected.</p>
+          <div class="connection-memory-row">
+            <label class="toggle-label" for="auto-connect-checkbox">
+              <input id="auto-connect-checkbox" type="checkbox" checked />
+              Auto-connect last cube
+            </label>
+            <button id="forget-cubes-btn">Forget Cubes</button>
+          </div>
+          <p id="remembered-cubes-status" class="meta-line">Remembered cubes: none</p>
         </section>
+      </section>
 
+      <section id="solve-screen" class="screen active">
         <section class="card cube-card">
           <div class="history-header">
             <h2>Cube Sync</h2>
             <button id="reset-cube-sync-btn">Reset Cube Data</button>
           </div>
-          <p id="cube-sync-status">Waiting for cube state...</p>
-          <div id="cube-viewport" class="cube-viewport"></div>
-        </section>
-
-        <section class="card timer-card">
-          <h2>Timer</h2>
-          <p id="timer-display" class="timer-display">0.00</p>
-          <p id="inspection-display" class="inspection-display">Inspection: --</p>
-          <div class="timer-controls">
-            <button id="manual-toggle-btn">Start / Stop (Space)</button>
-            <button id="reset-btn">Reset</button>
+          <div class="cube-status-row">
+            <p id="cube-sync-status">Waiting for cube state...</p>
+            <p id="inspection-display" class="inspection-display compact">Inspection: --</p>
           </div>
+          <div class="timer-inline">
+            <p id="timer-display" class="timer-display compact">0.00</p>
+            <div class="timer-controls timer-controls-compact">
+              <button id="manual-toggle-btn">Start / Stop (Space)</button>
+              <button id="reset-btn">Reset</button>
+            </div>
+          </div>
+          <div class="cube-action-row">
+            <button id="prepare-solve-btn">Prepare Solve</button>
+            <button id="start-inspection-btn" disabled>Start Inspection</button>
+          </div>
+          <div class="orientation-sync-row">
+            <label class="toggle-label" for="orientation-sync-checkbox">
+              <input id="orientation-sync-checkbox" type="checkbox" />
+              Cube orientation sync
+            </label>
+            <p id="orientation-sync-status" class="meta-line">Orientation sync: off</p>
+          </div>
+          <div id="cube-viewport" class="cube-viewport"></div>
         </section>
 
         <section class="card workflow-card">
@@ -70,23 +95,11 @@
               <input id="inspection-seconds-input" type="number" min="0" max="30" step="1" value="15" />
             </label>
           </div>
-          <div class="workflow-controls">
-            <button id="prepare-solve-btn">Prepare Solve</button>
-            <button id="start-inspection-btn" disabled>Start Inspection</button>
-          </div>
           <p id="workflow-status">No active solve cycle.</p>
           <p id="scramble-display" class="mono-text">Scramble: -</p>
           <p id="scramble-progress">Progress: 0 / 0</p>
         </section>
 
-        <section class="card update-card">
-          <h2>Updates</h2>
-          <p id="update-status">Not checked yet.</p>
-          <div class="update-controls">
-            <button id="check-update-btn">Check for update</button>
-            <button id="download-update-btn" disabled>Open latest APK</button>
-          </div>
-        </section>
       </section>
 
       <section id="records-screen" class="screen">
@@ -98,10 +111,167 @@
 
         <section class="card history-card">
           <div class="history-header">
+            <h2>Record Tools</h2>
+          </div>
+          <div class="workflow-grid">
+            <label class="field-label">
+              Filter by method
+              <select id="records-method-filter">
+                <option value="all" selected>All methods</option>
+              </select>
+            </label>
+            <label class="field-label">
+              Sort
+              <select id="records-sort-select">
+                <option value="newest" selected>Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="fastest">Fastest time</option>
+                <option value="slowest">Slowest time</option>
+                <option value="moves-low">Fewest moves</option>
+                <option value="moves-high">Most moves</option>
+                <option value="tps-high">Highest TPS</option>
+                <option value="tps-low">Lowest TPS</option>
+              </select>
+            </label>
+          </div>
+          <div class="update-controls">
+            <button id="export-solves-json-btn">Export JSON</button>
+            <button id="export-solves-csv-btn">Export CSV</button>
+            <button id="import-solves-btn">Import JSON</button>
+            <input id="import-solves-input" type="file" accept=".json,application/json" hidden />
+          </div>
+        </section>
+
+        <section class="card history-card">
+          <h2>Analytics Trends</h2>
+          <p class="meta-line">Moves vs time and TPS trend for the current filtered view.</p>
+          <svg id="moves-time-chart" class="record-chart" viewBox="0 0 300 140" role="img" aria-label="Moves versus time chart"></svg>
+          <svg id="tps-trend-chart" class="record-chart" viewBox="0 0 300 140" role="img" aria-label="Turns per second chart"></svg>
+        </section>
+
+        <section class="card history-card">
+          <div class="history-header">
             <h2>Solve History</h2>
             <button id="clear-solves-btn">Clear</button>
           </div>
           <ol id="solve-list"></ol>
+        </section>
+
+        <section id="solve-analysis-modal" class="card analysis-modal hidden">
+          <div class="history-header">
+            <h2 id="analysis-title">Solve Analysis</h2>
+            <button id="close-analysis-btn">Close</button>
+          </div>
+          <p id="analysis-summary" class="meta-line">No solve selected.</p>
+          <div id="analysis-details"></div>
+        </section>
+      </section>
+
+      <section id="calibration-screen" class="screen">
+        <section class="card calibration-card">
+          <h2>Orientation Calibration</h2>
+          <p class="meta-line">Gyro accuracy work in progress. Use this wizard when needed.</p>
+          <div class="orientation-calibration-actions">
+            <button id="start-orientation-calibration-btn">Calibrate 6 Faces</button>
+            <button id="capture-orientation-calibration-btn" disabled>Capture Face Up</button>
+            <button id="reset-orientation-calibration-btn">Reset Calibration</button>
+          </div>
+          <p id="orientation-calibration-status" class="meta-line">
+            Calibration: connect cube, then place each face up in sequence U, R, F, D, L, B.
+          </p>
+        </section>
+      </section>
+
+      <section id="debug-screen" class="screen">
+        <section class="card">
+          <div class="history-header">
+            <h2>Gyro Debug Render</h2>
+            <button id="debug-reset-reference-btn">Reset Debug Reference</button>
+          </div>
+          <p class="meta-line">Live test render for gyro mapping changes.</p>
+          <div id="debug-cube-viewport" class="cube-viewport debug-cube-viewport"></div>
+        </section>
+
+        <section class="card">
+          <h2>Gyro Debug Controls</h2>
+          <div class="workflow-grid">
+            <label class="toggle-label" for="debug-enable-sync-checkbox">
+              <input id="debug-enable-sync-checkbox" type="checkbox" checked />
+              Debug render orientation sync
+            </label>
+            <label class="toggle-label" for="debug-use-calibration-checkbox">
+              <input id="debug-use-calibration-checkbox" type="checkbox" checked />
+              Apply saved calibration
+            </label>
+            <label class="toggle-label" for="debug-invert-gyro-checkbox">
+              <input id="debug-invert-gyro-checkbox" type="checkbox" />
+              Invert gyro quaternion
+            </label>
+            <label class="field-label">
+              Delta order
+              <select id="debug-delta-order-select">
+                <option value="sensor_ref" selected>sensor * inverse(reference)</option>
+                <option value="ref_sensor">inverse(reference) * sensor</option>
+              </select>
+            </label>
+            <label class="field-label">
+              Frame preset
+              <select id="debug-frame-preset-select">
+                <option value="none" selected>None</option>
+                <option value="x90">Rotate +90° X</option>
+                <option value="x-90">Rotate -90° X</option>
+                <option value="y90">Rotate +90° Y</option>
+                <option value="y-90">Rotate -90° Y</option>
+                <option value="z90">Rotate +90° Z</option>
+                <option value="z-90">Rotate -90° Z</option>
+                <option value="x180">Rotate 180° X</option>
+                <option value="y180">Rotate 180° Y</option>
+                <option value="z180">Rotate 180° Z</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Gyro Data</h2>
+          <p id="debug-gyro-status" class="meta-line">No gyro samples yet.</p>
+          <p class="meta-line">Samples: <strong id="debug-gyro-sample-count">0</strong></p>
+          <p class="meta-line">Last event: <strong id="debug-last-event-age">never</strong></p>
+          <div class="debug-grid">
+            <div>
+              <p class="meta-line">Raw quaternion</p>
+              <pre id="debug-raw-quaternion" class="debug-code">-</pre>
+            </div>
+            <div>
+              <p class="meta-line">Post calibration/toggles quaternion</p>
+              <pre id="debug-final-quaternion" class="debug-code">-</pre>
+            </div>
+            <div>
+              <p class="meta-line">Raw up-vector</p>
+              <pre id="debug-raw-up" class="debug-code">-</pre>
+            </div>
+            <div>
+              <p class="meta-line">Final up-vector</p>
+              <pre id="debug-final-up" class="debug-code">-</pre>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section id="updates-screen" class="screen">
+        <section class="card update-card">
+          <h2>Updates</h2>
+          <p id="update-status">Not checked yet.</p>
+          <div class="update-controls">
+            <button id="check-update-btn">Check for update</button>
+            <button id="download-update-btn" disabled>Open latest APK</button>
+          </div>
+          <div class="release-notes-block">
+            <h3>Recent Release Notes</h3>
+            <ul id="release-notes-list" class="release-notes-list">
+              <li class="meta-line">No release notes loaded yet.</li>
+            </ul>
+          </div>
         </section>
       </section>
     </main>

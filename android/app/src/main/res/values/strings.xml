@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">GAN Smartcube Lite</string>
-    <string name="title_activity_main">GAN Smartcube Lite</string>
-    <string name="package_name">com.dawnforger.gansmartcubelite</string>
-    <string name="custom_url_scheme">com.dawnforger.gansmartcubelite</string>
+    <string name="app_name">HS Cube</string>
+    <string name="title_activity_main">HS Cube</string>
+    <string name="package_name">com.dawnforger.hscube</string>
+    <string name="custom_url_scheme">com.dawnforger.hscube</string>
 </resources>

@@ -1,4 +1,4 @@
-package com.dawnforger.gansmartcubelite;
+package com.dawnforger.hscube;
 
 import com.getcapacitor.BridgeActivity;
 

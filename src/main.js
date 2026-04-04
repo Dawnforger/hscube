@@ -1,13 +1,40 @@
 import { connectGanCube } from "gan-web-bluetooth";
 import { createCubeRenderer } from "./cubeRenderer";
-import { installNativeBluetoothShimIfNeeded } from "./nativeBluetooth";
+import {
+  clearNativePreferredDevice,
+  installNativeBluetoothShimIfNeeded,
+  setNativePreferredDevice,
+} from "./nativeBluetooth";
 
-const STORAGE_KEY = "gan-smartcube-lite-solves-v1";
+const STORAGE_KEY = "hs-cube-solves-v1";
+const KNOWN_CUBES_KEY = "gan-smartcube-known-cubes-v1";
+const LAST_CUBE_KEY = "gan-smartcube-last-cube-v1";
+const AUTO_CONNECT_LAST_CUBE_KEY = "gan-smartcube-auto-connect-last-cube-v1";
+const ORIENTATION_SYNC_KEY = "hs-cube-orientation-sync-v1";
+const ORIENTATION_CALIBRATION_KEY = "hs-cube-orientation-calibration-v1";
 const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.0.0";
 const RELEASES_API_URL = "https://api.github.com/repos/Dawnforger/hscube/releases?per_page=20";
 const FACELET_POLL_THROTTLE_MS = 180;
 const SCRAMBLE_LENGTH = 20;
 const MAX_INSPECTION_SECONDS = 30;
+const CALIBRATION_FACE_SEQUENCE = ["U", "R", "F", "D", "L", "B"];
+const CALIBRATION_SAMPLE_COUNT = 20;
+const FACE_START_INDEX = {
+  U: 0,
+  R: 9,
+  F: 18,
+  D: 27,
+  L: 36,
+  B: 45,
+};
+const ORIENTATION_AXIS_REFERENCE = {
+  U: { x: 0, y: 0, z: 1 },
+  R: { x: 1, y: 0, z: 0 },
+  F: { x: 0, y: 1, z: 0 },
+  D: { x: 0, y: 0, z: -1 },
+  L: { x: -1, y: 0, z: 0 },
+  B: { x: 0, y: -1, z: 0 },
+};
 const WORKFLOW_PHASE = {
   IDLE: "idle",
   SCRAMBLING: "scrambling",
@@ -19,15 +46,31 @@ const SCRAMBLE_MODE = {
   FREE: "free",
   ALG: "alg",
 };
+const CFOP_PHASES = ["Cross/F2L", "OLL", "PLL"];
+const ROUX_PHASES = ["FB/SB", "CMLL", "LSE"];
+const LBL_PHASES = ["First Layer", "Second Layer", "Last Layer"];
+const SOLVED_FACELETS = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
+const DEBUG_DELTA_ORDER = {
+  SENSOR_REF: "sensor_ref",
+  REF_SENSOR: "ref_sensor",
+};
 
 const elements = {
   menuToggleBtn: document.querySelector("#menu-toggle-btn"),
   sideDrawer: document.querySelector("#side-drawer"),
   drawerBackdrop: document.querySelector("#drawer-backdrop"),
+  navPairingBtn: document.querySelector("#nav-pairing-btn"),
   navSolveBtn: document.querySelector("#nav-solve-btn"),
   navRecordsBtn: document.querySelector("#nav-records-btn"),
+  navCalibrationBtn: document.querySelector("#nav-calibration-btn"),
+  navDebugBtn: document.querySelector("#nav-debug-btn"),
+  navUpdatesBtn: document.querySelector("#nav-updates-btn"),
+  pairingScreen: document.querySelector("#pairing-screen"),
   solveScreen: document.querySelector("#solve-screen"),
   recordsScreen: document.querySelector("#records-screen"),
+  calibrationScreen: document.querySelector("#calibration-screen"),
+  debugScreen: document.querySelector("#debug-screen"),
+  updatesScreen: document.querySelector("#updates-screen"),
   connectBtn: document.querySelector("#connect-btn"),
   disconnectBtn: document.querySelector("#disconnect-btn"),
   connectionStatus: document.querySelector("#connection-status"),
@@ -47,12 +90,49 @@ const elements = {
   scrambleProgress: document.querySelector("#scramble-progress"),
   totalSolves: document.querySelector("#total-solves"),
   ao5Value: document.querySelector("#ao5-value"),
+  recordsMethodFilter: document.querySelector("#records-method-filter"),
+  recordsSortSelect: document.querySelector("#records-sort-select"),
+  exportSolvesJsonBtn: document.querySelector("#export-solves-json-btn"),
+  exportSolvesCsvBtn: document.querySelector("#export-solves-csv-btn"),
+  importSolvesBtn: document.querySelector("#import-solves-btn"),
+  importSolvesInput: document.querySelector("#import-solves-input"),
+  movesTimeChart: document.querySelector("#moves-time-chart"),
+  tpsTrendChart: document.querySelector("#tps-trend-chart"),
   solveList: document.querySelector("#solve-list"),
+  solveAnalysisModal: document.querySelector("#solve-analysis-modal"),
+  analysisTitle: document.querySelector("#analysis-title"),
+  analysisSummary: document.querySelector("#analysis-summary"),
+  analysisDetails: document.querySelector("#analysis-details"),
+  closeAnalysisBtn: document.querySelector("#close-analysis-btn"),
   clearSolvesBtn: document.querySelector("#clear-solves-btn"),
   appVersion: document.querySelector("#app-version"),
   updateStatus: document.querySelector("#update-status"),
+  releaseNotesList: document.querySelector("#release-notes-list"),
   checkUpdateBtn: document.querySelector("#check-update-btn"),
   downloadUpdateBtn: document.querySelector("#download-update-btn"),
+  autoConnectCheckbox: document.querySelector("#auto-connect-checkbox"),
+  forgetCubesBtn: document.querySelector("#forget-cubes-btn"),
+  rememberedCubesStatus: document.querySelector("#remembered-cubes-status"),
+  orientationSyncCheckbox: document.querySelector("#orientation-sync-checkbox"),
+  orientationSyncStatus: document.querySelector("#orientation-sync-status"),
+  startOrientationCalibrationBtn: document.querySelector("#start-orientation-calibration-btn"),
+  captureOrientationCalibrationBtn: document.querySelector("#capture-orientation-calibration-btn"),
+  resetOrientationCalibrationBtn: document.querySelector("#reset-orientation-calibration-btn"),
+  orientationCalibrationStatus: document.querySelector("#orientation-calibration-status"),
+  debugCubeViewport: document.querySelector("#debug-cube-viewport"),
+  debugEnableSyncCheckbox: document.querySelector("#debug-enable-sync-checkbox"),
+  debugUseCalibrationCheckbox: document.querySelector("#debug-use-calibration-checkbox"),
+  debugInvertGyroCheckbox: document.querySelector("#debug-invert-gyro-checkbox"),
+  debugDeltaOrderSelect: document.querySelector("#debug-delta-order-select"),
+  debugFramePresetSelect: document.querySelector("#debug-frame-preset-select"),
+  debugResetReferenceBtn: document.querySelector("#debug-reset-reference-btn"),
+  debugGyroStatus: document.querySelector("#debug-gyro-status"),
+  debugGyroSampleCount: document.querySelector("#debug-gyro-sample-count"),
+  debugLastEventAge: document.querySelector("#debug-last-event-age"),
+  debugRawQuaternion: document.querySelector("#debug-raw-quaternion"),
+  debugFinalQuaternion: document.querySelector("#debug-final-quaternion"),
+  debugRawUp: document.querySelector("#debug-raw-up"),
+  debugFinalUp: document.querySelector("#debug-final-up"),
 };
 
 let cubeConnection = null;
@@ -65,21 +145,45 @@ let frameId = null;
 let sawUnsolvedDuringRun = false;
 let nativeBluetoothActive = false;
 let latestApkDownloadUrl = null;
+let latestReleasePageUrl = null;
 let currentCubeSolved = true;
 let currentFacelets = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
 let cubeRenderer = null;
 let activeScreen = "solve";
+let autoConnectAttempted = false;
+let autoConnectInProgress = false;
+let suppressDisconnectRemembering = false;
+let orientationSyncEnabled = false;
+let orientationSupportedByCube = null;
+let receivedOrientationSample = false;
+let latestGyroQuaternion = null;
+let recentGyroSamples = [];
+let orientationCalibrationCorrection = identityQuaternion();
+let orientationCalibrationSession = null;
+let debugCubeRenderer = null;
+let debugRendererSyncEnabled = true;
+let debugUseCalibration = true;
+let debugInvertGyro = false;
+let debugDeltaOrder = DEBUG_DELTA_ORDER.SENSOR_REF;
+let debugFramePreset = "none";
+let debugGyroSampleCount = 0;
+let debugLastGyroEventAt = null;
 
 let workflowPhase = WORKFLOW_PHASE.IDLE;
 let scrambleMode = SCRAMBLE_MODE.ALG;
 let inspectionSeconds = 15;
 let scrambleMoves = [];
 let scrambleStep = 0;
+let pendingDoubleMoveToken = null;
+let pendingDoubleMoveDirection = null;
 let scrambleOffTrackMove = null;
 let inspectionEndPerfMs = 0;
 let inspectionFrameId = null;
+let activeSolveTrack = null;
+let selectedSolveId = null;
 
 const solves = loadSolves();
+const knownCubes = loadKnownCubes();
 
 elements.connectBtn.addEventListener("click", onConnectClick);
 elements.disconnectBtn.addEventListener("click", () => {
@@ -87,8 +191,12 @@ elements.disconnectBtn.addEventListener("click", () => {
 });
 elements.menuToggleBtn.addEventListener("click", toggleDrawer);
 elements.drawerBackdrop.addEventListener("click", closeDrawer);
+elements.navPairingBtn.addEventListener("click", () => switchScreen("pairing"));
 elements.navSolveBtn.addEventListener("click", () => switchScreen("solve"));
 elements.navRecordsBtn.addEventListener("click", () => switchScreen("records"));
+elements.navCalibrationBtn.addEventListener("click", () => switchScreen("calibration"));
+elements.navDebugBtn.addEventListener("click", () => switchScreen("debug"));
+elements.navUpdatesBtn.addEventListener("click", () => switchScreen("updates"));
 elements.resetCubeSyncBtn.addEventListener("click", () => {
   void resetCubeData();
 });
@@ -101,10 +209,29 @@ elements.startInspectionBtn.addEventListener("click", () => startInspection());
 elements.scrambleModeSelect.addEventListener("change", onWorkflowConfigChange);
 elements.inspectionSecondsInput.addEventListener("change", onWorkflowConfigChange);
 elements.clearSolvesBtn.addEventListener("click", clearSolves);
+elements.recordsMethodFilter.addEventListener("change", renderSolves);
+elements.recordsSortSelect.addEventListener("change", renderSolves);
+elements.exportSolvesJsonBtn.addEventListener("click", exportSolvesJson);
+elements.exportSolvesCsvBtn.addEventListener("click", exportSolvesCsv);
+elements.importSolvesBtn.addEventListener("click", () => elements.importSolvesInput.click());
+elements.importSolvesInput.addEventListener("change", onImportSolvesSelected);
 elements.checkUpdateBtn.addEventListener("click", () => {
   void checkForUpdate({ userInitiated: true });
 });
 elements.downloadUpdateBtn.addEventListener("click", openLatestApk);
+elements.autoConnectCheckbox.addEventListener("change", onAutoConnectToggle);
+elements.forgetCubesBtn.addEventListener("click", forgetRememberedCubes);
+elements.orientationSyncCheckbox.addEventListener("change", onOrientationSyncToggle);
+elements.startOrientationCalibrationBtn.addEventListener("click", startOrientationCalibration);
+elements.captureOrientationCalibrationBtn.addEventListener("click", captureOrientationCalibrationFace);
+elements.resetOrientationCalibrationBtn.addEventListener("click", resetOrientationCalibration);
+elements.closeAnalysisBtn.addEventListener("click", closeSolveAnalysis);
+elements.debugEnableSyncCheckbox.addEventListener("change", onDebugControlsChanged);
+elements.debugUseCalibrationCheckbox.addEventListener("change", onDebugControlsChanged);
+elements.debugInvertGyroCheckbox.addEventListener("change", onDebugControlsChanged);
+elements.debugDeltaOrderSelect.addEventListener("change", onDebugControlsChanged);
+elements.debugFramePresetSelect.addEventListener("change", onDebugControlsChanged);
+elements.debugResetReferenceBtn.addEventListener("click", resetDebugOrientationReferences);
 
 document.addEventListener("keydown", (event) => {
   if (event.code !== "Space" || event.repeat) {
@@ -130,12 +257,23 @@ async function bootstrap() {
   switchScreen("solve");
   cubeRenderer = createCubeRenderer(elements.cubeViewport);
   cubeRenderer.updateFromFacelets(currentFacelets);
+  debugCubeRenderer = createCubeRenderer(elements.debugCubeViewport);
+  debugCubeRenderer.updateFromFacelets(currentFacelets);
+  orientationCalibrationCorrection = loadOrientationCalibrationCorrection();
+  syncDebugControlsToUi();
+  applyDebugControlState();
+  renderDebugGyroData(null, null);
+  applyOrientationSyncPreference(loadOrientationSyncPreference(), { persist: false });
   setCubeSyncStatus("Waiting for cube state...");
   renderTimer();
   renderInspection();
   renderSolves();
+  renderRememberedCubesStatus();
   renderWorkflow();
+  updateOrientationCalibrationStatus();
+  renderReleaseNotes([]);
   elements.appVersion.textContent = APP_VERSION;
+  elements.autoConnectCheckbox.checked = loadAutoConnectPreference();
   setUpdateStatus("Not checked yet.");
   setBluetoothStatus("Not connected.");
   elements.connectBtn.disabled = true;
@@ -156,6 +294,9 @@ async function bootstrap() {
   if (nativeBluetoothActive) {
     setBluetoothStatus("Native BLE ready. Connect cube then prepare solve.");
     void checkForUpdate({ userInitiated: false });
+    if (elements.autoConnectCheckbox.checked) {
+      void maybeAutoConnectLastCube();
+    }
   }
 
   elements.connectBtn.disabled = false;
@@ -163,22 +304,48 @@ async function bootstrap() {
 
 window.addEventListener("beforeunload", () => {
   cubeRenderer?.destroy();
+  debugCubeRenderer?.destroy();
 });
 
 async function onConnectClick() {
+  autoConnectAttempted = true;
+  suppressDisconnectRemembering = false;
+  clearNativePreferredDevice();
+  setBluetoothStatus(
+    nativeBluetoothActive
+      ? "Opening native Bluetooth picker..."
+      : "Opening Bluetooth device picker...",
+  );
+  await connectToCube({
+    usePreferredDevice: false,
+    suppressPickerOnFailure: false,
+    userInitiated: true,
+  });
+}
+
+async function connectToCube(options = {}) {
+  const {
+    usePreferredDevice = false,
+    suppressPickerOnFailure = false,
+    userInitiated = false,
+  } = options;
   if (!("bluetooth" in navigator)) {
     return;
   }
 
   elements.connectBtn.disabled = true;
   elements.disconnectBtn.disabled = true;
-  setBluetoothStatus(
-    nativeBluetoothActive
-      ? "Opening native Bluetooth picker..."
-      : "Opening Bluetooth device picker...",
-  );
+  if (usePreferredDevice && !userInitiated) {
+    setBluetoothStatus("Attempting auto-connect to last cube...");
+  }
 
   try {
+    if (nativeBluetoothActive && usePreferredDevice) {
+      const lastCube = getLastCube();
+      if (lastCube?.id) {
+        setNativePreferredDevice(lastCube.id, { suppressPickerOnFailure });
+      }
+    }
     const connection = await connectGanCube(makeMacAddressProvider());
     cubeConnection = connection;
     cubeEventsSubscription = connection.events$.subscribe((event) => {
@@ -189,8 +356,22 @@ async function onConnectClick() {
     elements.disconnectBtn.disabled = false;
     currentCubeSolved = true;
     sawUnsolvedDuringRun = false;
+    orientationSupportedByCube = null;
+    receivedOrientationSample = false;
+    latestGyroQuaternion = null;
+    recentGyroSamples = [];
+    orientationCalibrationSession = null;
+    cubeRenderer?.resetOrientationSyncReference();
+    debugCubeRenderer?.resetOrientationSyncReference();
+    rememberConnectedCube(connection);
     await connection.sendCubeCommand({ type: "REQUEST_FACELETS" });
+    await connection.sendCubeCommand({ type: "REQUEST_HARDWARE" }).catch(() => undefined);
+    updateOrientationSyncStatus();
+    updateOrientationCalibrationStatus();
   } catch (error) {
+    if (usePreferredDevice) {
+      clearNativePreferredDevice();
+    }
     const message = error instanceof Error ? error.message : String(error);
     const normalized = message.toLowerCase();
     if (
@@ -208,14 +389,17 @@ async function onConnectClick() {
       setBluetoothStatus(`Connection failed: ${message}`);
     }
 
-    await disconnectCube({ preserveStatus: true });
+    await disconnectCube({ preserveStatus: true, forgetPreferred: false });
   } finally {
+    if (nativeBluetoothActive) {
+      clearNativePreferredDevice();
+    }
     elements.connectBtn.disabled = false;
   }
 }
 
 async function disconnectCube(options = {}) {
-  const { preserveStatus = false } = options;
+  const { preserveStatus = false, forgetPreferred = false } = options;
 
   stopInspection({ resetDisplay: true });
   if (timerRunning) {
@@ -237,6 +421,22 @@ async function disconnectCube(options = {}) {
     await cubeConnection.disconnect().catch(() => undefined);
     cubeConnection = null;
   }
+  if (forgetPreferred) {
+    forgetLastCube();
+    clearNativePreferredDevice();
+  }
+  orientationSupportedByCube = null;
+  receivedOrientationSample = false;
+  latestGyroQuaternion = null;
+  recentGyroSamples = [];
+  orientationCalibrationSession = null;
+  cubeRenderer?.resetOrientationSyncReference();
+  debugCubeRenderer?.resetOrientationSyncReference();
+  debugGyroSampleCount = 0;
+  debugLastGyroEventAt = null;
+  renderDebugGyroData(null, null);
+  updateOrientationSyncStatus();
+  updateOrientationCalibrationStatus();
 
   elements.disconnectBtn.disabled = true;
   if (!preserveStatus) {
@@ -258,7 +458,18 @@ async function onGanCubeEvent(event) {
 
   if (event.type === "MOVE") {
     handleAlgScrambleMove(event.move);
+    captureSolveMoveEvent(event.move, event.timestamp);
     scheduleFaceletPoll();
+    return;
+  }
+
+  if (event.type === "HARDWARE") {
+    onHardwareEvent(event);
+    return;
+  }
+
+  if (event.type === "GYRO") {
+    onGyroEvent(event);
     return;
   }
 
@@ -269,6 +480,8 @@ async function onGanCubeEvent(event) {
   currentCubeSolved = isFaceletsSolved(event.facelets);
   currentFacelets = event.facelets;
   cubeRenderer?.updateFromFacelets(currentFacelets);
+  debugCubeRenderer?.updateFromFacelets(currentFacelets);
+  captureSolveFaceletsEvent(currentFacelets, event.timestamp);
   setCubeSyncStatus(currentCubeSolved ? "Cube is solved." : "Cube state in sync.");
 
   if (workflowPhase === WORKFLOW_PHASE.SOLVING && timerRunning) {
@@ -299,11 +512,6 @@ function scheduleFaceletPoll() {
 }
 
 async function prepareSolveCycle() {
-  if (!cubeConnection) {
-    setWorkflowStatus("Connect cube first.");
-    return;
-  }
-
   stopInspection({ resetDisplay: true });
   if (timerRunning) {
     stopTimer({ saveSolve: false, source: "manual" });
@@ -314,26 +522,33 @@ async function prepareSolveCycle() {
   scrambleMode = readScrambleMode();
   inspectionSeconds = readInspectionSeconds();
   scrambleStep = 0;
+  pendingDoubleMoveToken = null;
+  pendingDoubleMoveDirection = null;
   scrambleOffTrackMove = null;
   sawUnsolvedDuringRun = false;
+  const connected = Boolean(cubeConnection);
 
   if (scrambleMode === SCRAMBLE_MODE.FREE) {
     workflowPhase = WORKFLOW_PHASE.SCRAMBLING;
     scrambleMoves = [];
-    elements.scrambleDisplay.textContent = "Scramble: Free mode";
-    elements.scrambleProgress.textContent = "Progress: free scramble";
+    updateScrambleProgressText();
     setWorkflowStatus("Scramble freely, then tap Start Inspection.");
     elements.startInspectionBtn.disabled = false;
   } else {
-    workflowPhase = WORKFLOW_PHASE.SCRAMBLING;
+    workflowPhase = connected ? WORKFLOW_PHASE.SCRAMBLING : WORKFLOW_PHASE.READY_INSPECTION;
     scrambleMoves = generateScramble(SCRAMBLE_LENGTH);
-    elements.scrambleDisplay.textContent = `Scramble: ${scrambleMoves.join(" ")}`;
-    elements.startInspectionBtn.disabled = true;
+    elements.startInspectionBtn.disabled = connected;
     updateScrambleProgressText();
-    setWorkflowStatus(`Apply scramble. Next move: ${scrambleMoves[0]}`);
+    setWorkflowStatus(
+      connected
+        ? `Apply scramble. Next move: ${describeExpectedMove(scrambleMoves[0])}`
+        : "Algorithm generated. Apply scramble manually, then tap Start Inspection.",
+    );
   }
 
-  await cubeConnection.sendCubeCommand({ type: "REQUEST_FACELETS" }).catch(() => undefined);
+  if (connected) {
+    await cubeConnection.sendCubeCommand({ type: "REQUEST_FACELETS" }).catch(() => undefined);
+  }
   renderWorkflow();
 }
 
@@ -355,7 +570,9 @@ function handleAlgScrambleMove(moveToken) {
     const undoMove = inverseMoveToken(scrambleOffTrackMove);
     if (move === undoMove) {
       scrambleOffTrackMove = null;
-      const nextMove = scrambleMoves[scrambleStep];
+      pendingDoubleMoveToken = null;
+      pendingDoubleMoveDirection = null;
+      const nextMove = describeExpectedMove(scrambleMoves[scrambleStep]);
       setWorkflowStatus(
         nextMove
           ? `Recovered. Continue with ${nextMove}.`
@@ -369,30 +586,50 @@ function handleAlgScrambleMove(moveToken) {
   }
 
   const expectedMove = scrambleMoves[scrambleStep];
-  if (move === expectedMove) {
+  const expectedConsume = consumeExpectedMove(expectedMove, move);
+  if (expectedConsume.handled && !expectedConsume.advanced) {
+    pendingDoubleMoveToken = expectedConsume.pending;
+    pendingDoubleMoveDirection = expectedConsume.pendingDirection;
+    if (expectedConsume.hint) {
+      setWorkflowStatus(expectedConsume.hint);
+    }
+    updateScrambleProgressText();
+    return;
+  }
+
+  if (expectedConsume.advanced) {
+    pendingDoubleMoveToken = null;
+    pendingDoubleMoveDirection = null;
     scrambleStep += 1;
     if (scrambleStep >= scrambleMoves.length) {
       workflowPhase = WORKFLOW_PHASE.READY_INSPECTION;
       setWorkflowStatus("Scramble complete. Tap Start Inspection.");
       elements.startInspectionBtn.disabled = false;
     } else {
-      setWorkflowStatus(`Good. Next move: ${scrambleMoves[scrambleStep]}`);
+      setWorkflowStatus(`Good. Next move: ${describeExpectedMove(scrambleMoves[scrambleStep])}`);
     }
     updateScrambleProgressText();
     renderWorkflow();
     return;
   }
 
-  if (scrambleStep > 0 && move === inverseMoveToken(scrambleMoves[scrambleStep - 1])) {
+  pendingDoubleMoveToken = null;
+  pendingDoubleMoveDirection = null;
+  if (
+    scrambleStep > 0 &&
+    move === inverseMoveToken(scrambleMoves[scrambleStep - 1])
+  ) {
     scrambleStep -= 1;
-    setWorkflowStatus(`Stepped back. Next move: ${scrambleMoves[scrambleStep]}`);
+    pendingDoubleMoveToken = null;
+    pendingDoubleMoveDirection = null;
+    setWorkflowStatus(`Stepped back. Next move: ${describeExpectedMove(scrambleMoves[scrambleStep])}`);
     updateScrambleProgressText();
     return;
   }
 
   scrambleOffTrackMove = move;
   setWorkflowStatus(
-    `Misstep. Expected ${expectedMove}. Undo with ${inverseMoveToken(move)}.`,
+    `Misstep. Expected ${describeExpectedMove(expectedMove)}. Undo with ${inverseMoveToken(move)}.`,
   );
 }
 
@@ -451,6 +688,7 @@ function beginSolveTimer() {
   elapsedMs = 0;
   renderTimer();
   sawUnsolvedDuringRun = !currentCubeSolved;
+  createSolveTrack("cube");
   startTimer();
   setWorkflowStatus("Solve timer running...");
   renderWorkflow();
@@ -477,7 +715,10 @@ function stopTimer({ saveSolve, source }) {
   elements.manualToggleBtn.textContent = "Start / Stop (Space)";
 
   if (saveSolve && elapsedMs >= 10) {
-    addSolve(elapsedMs, source);
+    const analysis = closeSolveTrack(source, elapsedMs);
+    addSolve(elapsedMs, source, analysis);
+  } else {
+    activeSolveTrack = null;
   }
 }
 
@@ -496,6 +737,7 @@ function toggleManualTimer() {
 
   workflowPhase = WORKFLOW_PHASE.SOLVING;
   sawUnsolvedDuringRun = true;
+  createSolveTrack("manual");
   startTimer();
   setWorkflowStatus("Manual timer running.");
   renderWorkflow();
@@ -563,14 +805,137 @@ function renderWorkflow() {
 }
 
 function switchScreen(screen) {
-  activeScreen = screen === "records" ? "records" : "solve";
+  activeScreen =
+    screen === "pairing" ||
+    screen === "records" ||
+    screen === "debug" ||
+    screen === "updates" ||
+    screen === "calibration"
+      ? screen
+      : "solve";
 
+  const pairingActive = activeScreen === "pairing";
   const solveActive = activeScreen === "solve";
+  const recordsActive = activeScreen === "records";
+  const calibrationActive = activeScreen === "calibration";
+  const debugActive = activeScreen === "debug";
+  const updatesActive = activeScreen === "updates";
+  elements.pairingScreen.classList.toggle("active", pairingActive);
   elements.solveScreen.classList.toggle("active", solveActive);
-  elements.recordsScreen.classList.toggle("active", !solveActive);
+  elements.recordsScreen.classList.toggle("active", recordsActive);
+  elements.calibrationScreen.classList.toggle("active", calibrationActive);
+  elements.debugScreen.classList.toggle("active", debugActive);
+  elements.updatesScreen.classList.toggle("active", updatesActive);
+  elements.navPairingBtn.classList.toggle("active", pairingActive);
   elements.navSolveBtn.classList.toggle("active", solveActive);
-  elements.navRecordsBtn.classList.toggle("active", !solveActive);
+  elements.navRecordsBtn.classList.toggle("active", recordsActive);
+  elements.navCalibrationBtn.classList.toggle("active", calibrationActive);
+  elements.navDebugBtn.classList.toggle("active", debugActive);
+  elements.navUpdatesBtn.classList.toggle("active", updatesActive);
+  if (!recordsActive) {
+    closeSolveAnalysis();
+  }
   closeDrawer();
+}
+
+function onAutoConnectToggle() {
+  updateAutoConnectPreference(elements.autoConnectCheckbox.checked);
+  if (elements.autoConnectCheckbox.checked) {
+    const lastCube = getLastCube();
+    if (lastCube?.id) {
+      setBluetoothStatus(`Auto-connect enabled for ${lastCube.name}.`);
+      if (nativeBluetoothActive && !cubeConnection && !autoConnectInProgress) {
+        void maybeAutoConnectLastCube();
+      }
+      return;
+    }
+    setBluetoothStatus("Auto-connect enabled. Connect a cube once to remember it.");
+    return;
+  }
+
+  setBluetoothStatus("Auto-connect disabled.");
+}
+
+function onOrientationSyncToggle() {
+  applyOrientationSyncPreference(elements.orientationSyncCheckbox.checked, {
+    persist: true,
+  });
+}
+
+function startOrientationCalibration() {
+  if (!cubeConnection) {
+    updateOrientationCalibrationStatus("Calibration requires a connected cube.");
+    return;
+  }
+  if (orientationSupportedByCube === false) {
+    updateOrientationCalibrationStatus("This cube does not expose orientation data.");
+    return;
+  }
+  orientationCalibrationSession = {
+    phase: "capturing",
+    index: 0,
+    samples: {},
+  };
+  updateOrientationCalibrationStatus();
+}
+
+function captureOrientationCalibrationFace() {
+  if (!orientationCalibrationSession || orientationCalibrationSession.phase !== "capturing") {
+    updateOrientationCalibrationStatus("Start calibration before capturing.");
+    return;
+  }
+  const targetFace = CALIBRATION_FACE_SEQUENCE[orientationCalibrationSession.index];
+  if (!targetFace) {
+    updateOrientationCalibrationStatus("Calibration is already complete.");
+    return;
+  }
+  const samples = sampleCurrentQuaternion(CALIBRATION_SAMPLE_COUNT);
+  if (!samples.length) {
+    updateOrientationCalibrationStatus("Waiting for stable gyro sample. Hold the cube still.");
+    return;
+  }
+  const averaged = averageQuaternions(samples);
+  if (!averaged) {
+    updateOrientationCalibrationStatus("Calibration capture failed. Try again.");
+    return;
+  }
+  orientationCalibrationSession.samples[targetFace] = averaged;
+  orientationCalibrationSession.index += 1;
+  if (orientationCalibrationSession.index >= CALIBRATION_FACE_SEQUENCE.length) {
+    const correction = solveCalibrationCorrection(orientationCalibrationSession.samples);
+    if (!correction) {
+      updateOrientationCalibrationStatus("Calibration solve failed. Restart calibration.");
+      return;
+    }
+    orientationCalibrationCorrection = correction;
+    persistOrientationCalibrationCorrection(orientationCalibrationCorrection);
+    orientationCalibrationSession = {
+      phase: "complete",
+      index: CALIBRATION_FACE_SEQUENCE.length,
+      samples: orientationCalibrationSession.samples,
+    };
+    cubeRenderer?.resetOrientationSyncReference();
+    updateOrientationCalibrationStatus("Calibration complete. Orientation sync now uses calibrated axes.");
+    return;
+  }
+  updateOrientationCalibrationStatus();
+}
+
+function resetOrientationCalibration() {
+  orientationCalibrationSession = null;
+  orientationCalibrationCorrection = identityQuaternion();
+  clearOrientationCalibrationCorrection();
+  cubeRenderer?.resetOrientationSyncReference();
+  updateOrientationCalibrationStatus("Calibration reset. Using default orientation mapping.");
+}
+
+function forgetRememberedCubes() {
+  knownCubes.length = 0;
+  saveKnownCubes(knownCubes);
+  forgetLastCube();
+  clearNativePreferredDevice();
+  renderRememberedCubesStatus();
+  setBluetoothStatus("Forgot remembered cubes.");
 }
 
 function toggleDrawer() {
@@ -589,10 +954,6 @@ function closeDrawer() {
   elements.drawerBackdrop.classList.add("hidden");
 }
 
-window.addEventListener("beforeunload", () => {
-  cubeRenderer?.destroy();
-});
-
 function renderTimer() {
   elements.timerDisplay.textContent = formatTime(elapsedMs);
 }
@@ -602,6 +963,8 @@ function renderInspection() {
 }
 
 function updateScrambleProgressText() {
+  renderScrambleDisplay();
+
   if (!scrambleMoves.length) {
     elements.scrambleProgress.textContent = "Progress: free scramble";
     return;
@@ -612,7 +975,38 @@ function updateScrambleProgressText() {
     return;
   }
 
-  elements.scrambleProgress.textContent = `Progress: ${scrambleStep} / ${scrambleMoves.length} (next ${scrambleMoves[scrambleStep]})`;
+  elements.scrambleProgress.textContent = `Progress: ${scrambleStep} / ${scrambleMoves.length} (next ${describeExpectedMove(scrambleMoves[scrambleStep])})`;
+}
+
+function renderScrambleDisplay() {
+  if (!scrambleMoves.length) {
+    elements.scrambleDisplay.textContent = "Scramble: Free mode";
+    return;
+  }
+
+  const label = document.createElement("span");
+  label.textContent = "Scramble:";
+  const sequence = document.createElement("span");
+  sequence.className = "scramble-sequence";
+
+  for (let index = 0; index < scrambleMoves.length; index += 1) {
+    const chip = document.createElement("span");
+    chip.className = "scramble-chip";
+
+    if (index < scrambleStep) {
+      chip.classList.add("done");
+    } else if (index === scrambleStep) {
+      chip.classList.add("active");
+      if (pendingDoubleMoveToken === scrambleMoves[index]) {
+        chip.classList.add("half");
+      }
+    }
+
+    chip.textContent = scrambleMoves[index];
+    sequence.append(chip);
+  }
+
+  elements.scrambleDisplay.replaceChildren(label, sequence);
 }
 
 function readScrambleMode() {
@@ -634,11 +1028,14 @@ function formatInspectionTime(remainingMs) {
   return `${seconds.toFixed(1)}s`;
 }
 
-function addSolve(timeMs, source) {
+function addSolve(timeMs, source, analysis) {
+  const normalizedAnalysis = normalizeSolveAnalysis(analysis, timeMs);
   solves.push({
     id: crypto.randomUUID(),
     timeMs: Math.round(timeMs),
     source,
+    methodDetected: normalizedAnalysis.method,
+    analysis: normalizedAnalysis,
     recordedAt: new Date().toISOString(),
   });
   saveSolves(solves);
@@ -654,6 +1051,7 @@ function clearSolves() {
     return;
   }
   solves.length = 0;
+  closeSolveAnalysis();
   saveSolves(solves);
   renderSolves();
 }
@@ -661,6 +1059,7 @@ function clearSolves() {
 async function checkForUpdate({ userInitiated }) {
   elements.checkUpdateBtn.disabled = true;
   latestApkDownloadUrl = null;
+  latestReleasePageUrl = null;
   elements.downloadUpdateBtn.disabled = true;
   elements.downloadUpdateBtn.textContent = "Open latest APK";
   setUpdateStatus("Checking for updates...");
@@ -679,6 +1078,7 @@ async function checkForUpdate({ userInitiated }) {
     if (!Array.isArray(releases)) {
       throw new Error("Unexpected release payload.");
     }
+    renderReleaseNotes(releases);
 
     const latestRelease = pickLatestApkRelease(releases);
     if (!latestRelease) {
@@ -695,17 +1095,31 @@ async function checkForUpdate({ userInitiated }) {
     }
 
     latestApkDownloadUrl = apkAsset.browser_download_url;
+    latestReleasePageUrl =
+      typeof latestRelease.html_url === "string" ? latestRelease.html_url : null;
     const remoteVersion = parseVersion(latestRelease.tag_name) ?? parseVersion(apkAsset.name);
     if (!remoteVersion) {
-      setUpdateStatus(`Latest APK found: ${latestRelease.tag_name}`);
+      if (isNativeRuntime() && latestReleasePageUrl) {
+        setUpdateStatus(`Latest APK found: ${latestRelease.tag_name}. Open release page to download.`);
+        elements.downloadUpdateBtn.textContent = "Open latest release page";
+      } else {
+        setUpdateStatus(`Latest APK found: ${latestRelease.tag_name}`);
+      }
       elements.downloadUpdateBtn.disabled = false;
       return;
     }
 
     const comparison = compareSemver(remoteVersion, APP_VERSION);
     if (comparison > 0) {
-      setUpdateStatus(`Update available: v${remoteVersion} (current v${APP_VERSION}).`);
-      elements.downloadUpdateBtn.textContent = `Download v${remoteVersion}`;
+      if (isNativeRuntime() && latestReleasePageUrl) {
+        setUpdateStatus(
+          `Update available: v${remoteVersion} (current v${APP_VERSION}). Open release page for reliable download. Android still requires install confirmation.`,
+        );
+        elements.downloadUpdateBtn.textContent = `Open v${remoteVersion} release`;
+      } else {
+        setUpdateStatus(`Update available: v${remoteVersion} (current v${APP_VERSION}).`);
+        elements.downloadUpdateBtn.textContent = `Download v${remoteVersion}`;
+      }
       elements.downloadUpdateBtn.disabled = false;
       return;
     }
@@ -713,7 +1127,10 @@ async function checkForUpdate({ userInitiated }) {
     if (comparison === 0) {
       setUpdateStatus(`You are on the latest version (v${APP_VERSION}).`);
       if (userInitiated) {
-        elements.downloadUpdateBtn.textContent = "Reinstall current APK";
+        elements.downloadUpdateBtn.textContent =
+          isNativeRuntime() && latestReleasePageUrl
+            ? "Open current release page"
+            : "Reinstall current APK";
         elements.downloadUpdateBtn.disabled = false;
       }
       return;
@@ -733,7 +1150,22 @@ function openLatestApk() {
     return;
   }
 
-  window.open(latestApkDownloadUrl, "_blank", "noopener,noreferrer");
+  const useReleasePage = isNativeRuntime() && Boolean(latestReleasePageUrl);
+  const targetUrl = useReleasePage ? latestReleasePageUrl : latestApkDownloadUrl;
+  if (!targetUrl) {
+    return;
+  }
+
+  const openedWindow = window.open(targetUrl, "_blank", "noopener");
+  if (!openedWindow) {
+    window.location.assign(targetUrl);
+  }
+
+  if (useReleasePage) {
+    setUpdateStatus(
+      "Opened release page. Tap APK to download; Android then requires install confirmation to update app code.",
+    );
+  }
 }
 
 async function resetCubeData() {
@@ -746,6 +1178,8 @@ async function resetCubeData() {
     await cubeConnection.sendCubeCommand({ type: "REQUEST_RESET" });
     await cubeConnection.sendCubeCommand({ type: "REQUEST_FACELETS" });
     scrambleStep = 0;
+    pendingDoubleMoveToken = null;
+    pendingDoubleMoveDirection = null;
     scrambleOffTrackMove = null;
     if (scrambleMode === SCRAMBLE_MODE.ALG && scrambleMoves.length > 0) {
       updateScrambleProgressText();
@@ -765,23 +1199,454 @@ function renderSolves() {
 
   const ao5 = calculateAo5(solves);
   elements.ao5Value.textContent = ao5 === null ? "N/A" : formatTime(ao5);
+  renderRecordMethodOptions();
+
+  const visibleSolves = getVisibleSolves();
 
   elements.solveList.replaceChildren();
 
-  if (!solves.length) {
+  if (!visibleSolves.length) {
     const emptyItem = document.createElement("li");
-    emptyItem.textContent = "No solves recorded yet.";
+    emptyItem.textContent = solves.length
+      ? "No solves match current filters."
+      : "No solves recorded yet.";
     elements.solveList.append(emptyItem);
+    renderRecordsCharts([]);
     return;
   }
 
-  const reversed = [...solves].reverse();
-  for (const solve of reversed) {
+  for (const solve of visibleSolves) {
     const index = solves.findIndex((entry) => entry.id === solve.id) + 1;
     const item = document.createElement("li");
-    item.textContent = `#${index} - ${formatTime(solve.timeMs)} (${solve.source})`;
+    const button = document.createElement("button");
+    button.className = "solve-record-button";
+    button.type = "button";
+    const method = String(solve.methodDetected ?? "Unknown");
+    button.textContent = `#${index} - ${formatTime(solve.timeMs)} (${method})`;
+    button.addEventListener("click", () => openSolveAnalysis(solve.id));
+    item.append(button);
     elements.solveList.append(item);
   }
+
+  renderRecordsCharts(visibleSolves);
+}
+
+function renderRecordMethodOptions() {
+  const currentValue = elements.recordsMethodFilter.value || "all";
+  const methods = new Set();
+  for (const solve of solves) {
+    const normalized = normalizeSolveAnalysis(solve.analysis, solve.timeMs);
+    methods.add(normalized.method || "Unknown");
+  }
+
+  const options = ["all", ...[...methods].sort((left, right) => left.localeCompare(right))];
+  elements.recordsMethodFilter.replaceChildren();
+  for (const method of options) {
+    const option = document.createElement("option");
+    option.value = method;
+    option.textContent = method === "all" ? "All methods" : method;
+    elements.recordsMethodFilter.append(option);
+  }
+
+  const safeValue = options.includes(currentValue) ? currentValue : "all";
+  elements.recordsMethodFilter.value = safeValue;
+}
+
+function getVisibleSolves() {
+  const methodFilter = elements.recordsMethodFilter.value || "all";
+  const sortMode = elements.recordsSortSelect.value || "newest";
+  const filtered = solves.filter((solve) => {
+    if (methodFilter === "all") {
+      return true;
+    }
+    const analysis = normalizeSolveAnalysis(solve.analysis, solve.timeMs);
+    return analysis.method === methodFilter;
+  });
+
+  const sorted = [...filtered];
+  sorted.sort((left, right) => {
+    const leftAnalysis = normalizeSolveAnalysis(left.analysis, left.timeMs);
+    const rightAnalysis = normalizeSolveAnalysis(right.analysis, right.timeMs);
+    switch (sortMode) {
+      case "oldest":
+        return getSolveTimestamp(left) - getSolveTimestamp(right);
+      case "fastest":
+        return left.timeMs - right.timeMs;
+      case "slowest":
+        return right.timeMs - left.timeMs;
+      case "moves-low":
+        return leftAnalysis.totalMoves - rightAnalysis.totalMoves;
+      case "moves-high":
+        return rightAnalysis.totalMoves - leftAnalysis.totalMoves;
+      case "tps-low":
+        return leftAnalysis.tps - rightAnalysis.tps;
+      case "tps-high":
+        return rightAnalysis.tps - leftAnalysis.tps;
+      case "newest":
+      default:
+        return getSolveTimestamp(right) - getSolveTimestamp(left);
+    }
+  });
+  return sorted;
+}
+
+function getSolveTimestamp(solve) {
+  const timestamp = Date.parse(solve?.recordedAt ?? "");
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function exportSolvesJson() {
+  const payload = {
+    schema: "hs-cube-solves-export-v1",
+    appVersion: APP_VERSION,
+    exportedAt: new Date().toISOString(),
+    solves,
+  };
+  triggerDownload(
+    `hs-cube-solves-${makeTimestampTag()}.json`,
+    JSON.stringify(payload, null, 2),
+    "application/json",
+  );
+}
+
+function exportSolvesCsv() {
+  const rows = getVisibleSolves().map((solve) => {
+    const analysis = normalizeSolveAnalysis(solve.analysis, solve.timeMs);
+    const phaseSummary = analysis.phases
+      .map((phase) => `${phase.name}:${phase.moves}/${phase.timeMs}`)
+      .join(" | ");
+    return [
+      solve.id,
+      solve.recordedAt,
+      solve.source,
+      solve.timeMs,
+      formatTime(solve.timeMs),
+      analysis.method,
+      analysis.totalMoves,
+      analysis.tps.toFixed(3),
+      phaseSummary,
+    ];
+  });
+  const header = [
+    "id",
+    "recorded_at",
+    "source",
+    "time_ms",
+    "time_display",
+    "method",
+    "total_moves",
+    "tps",
+    "phase_breakdown",
+  ];
+  const csv = [header, ...rows].map((row) => row.map(toCsvCell).join(",")).join("\n");
+  triggerDownload(`hs-cube-solves-${makeTimestampTag()}.csv`, csv, "text/csv;charset=utf-8");
+}
+
+async function onImportSolvesSelected(event) {
+  const input = event?.target;
+  const file = input?.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    const imported = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.solves)
+        ? parsed.solves
+        : null;
+    if (!imported) {
+      throw new Error("Import file must be a solves array or object with a solves array.");
+    }
+
+    const existingIds = new Set(solves.map((solve) => solve.id));
+    let added = 0;
+    let skipped = 0;
+
+    for (const entry of imported) {
+      if (!Number.isFinite(entry?.timeMs)) {
+        skipped += 1;
+        continue;
+      }
+      const timeMs = Math.max(0, Math.round(entry.timeMs));
+      const analysis = normalizeSolveAnalysis(entry.analysis, timeMs);
+      const preferredId =
+        typeof entry?.id === "string" && entry.id.trim() ? entry.id.trim() : crypto.randomUUID();
+      const id = existingIds.has(preferredId) ? crypto.randomUUID() : preferredId;
+      existingIds.add(id);
+
+      solves.push({
+        id,
+        timeMs,
+        source: entry?.source === "cube" ? "cube" : "manual",
+        methodDetected:
+          typeof entry?.methodDetected === "string" && entry.methodDetected.trim()
+            ? entry.methodDetected.trim()
+            : analysis.method,
+        analysis,
+        recordedAt:
+          typeof entry?.recordedAt === "string" && entry.recordedAt.trim()
+            ? entry.recordedAt
+            : new Date().toISOString(),
+      });
+      added += 1;
+    }
+
+    solves.sort((left, right) => getSolveTimestamp(left) - getSolveTimestamp(right));
+    saveSolves(solves);
+    renderSolves();
+    window.alert(`Import complete. Added ${added} solves, skipped ${skipped}.`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    window.alert(`Import failed: ${message}`);
+  } finally {
+    input.value = "";
+  }
+}
+
+function renderRecordsCharts(visibleSolves) {
+  if (!elements.movesTimeChart || !elements.tpsTrendChart) {
+    return;
+  }
+  const movesVsTime = visibleSolves.map((solve) => {
+    const analysis = normalizeSolveAnalysis(solve.analysis, solve.timeMs);
+    return {
+      x: solve.timeMs / 1000,
+      y: analysis.totalMoves,
+    };
+  });
+  drawLineChart(elements.movesTimeChart, movesVsTime, {
+    title: "Moves vs Time",
+    xLabel: "Time (s)",
+    yLabel: "Moves",
+    color: "#78a6ff",
+  });
+
+  const tpsTrend = visibleSolves.map((solve, index) => {
+    const analysis = normalizeSolveAnalysis(solve.analysis, solve.timeMs);
+    return {
+      x: index + 1,
+      y: analysis.tps,
+    };
+  });
+  drawLineChart(elements.tpsTrendChart, tpsTrend, {
+    title: "TPS Trend",
+    xLabel: "Solve #",
+    yLabel: "TPS",
+    color: "#80dbb2",
+  });
+}
+
+function drawLineChart(svgElement, points, options) {
+  svgElement.replaceChildren();
+  const width = Number(svgElement.getAttribute("viewBox")?.split(" ")[2]) || 300;
+  const height = Number(svgElement.getAttribute("viewBox")?.split(" ")[3]) || 140;
+  const margin = { top: 18, right: 12, bottom: 24, left: 34 };
+  const plotWidth = Math.max(1, width - margin.left - margin.right);
+  const plotHeight = Math.max(1, height - margin.top - margin.bottom);
+
+  if (!Array.isArray(points) || points.length === 0) {
+    const empty = createSvgNode("text", {
+      x: width / 2,
+      y: height / 2,
+      "text-anchor": "middle",
+      fill: "#9fb0cd",
+      "font-size": "11",
+    });
+    empty.textContent = "No data for current filters";
+    svgElement.append(empty);
+    return;
+  }
+
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const point of points) {
+    minX = Math.min(minX, point.x);
+    maxX = Math.max(maxX, point.x);
+    minY = Math.min(minY, point.y);
+    maxY = Math.max(maxY, point.y);
+  }
+  minY = Math.min(0, minY);
+  if (minX === maxX) {
+    maxX += 1;
+  }
+  if (minY === maxY) {
+    maxY += 1;
+  }
+
+  const projectX = (value) => margin.left + ((value - minX) / (maxX - minX)) * plotWidth;
+  const projectY = (value) => margin.top + plotHeight - ((value - minY) / (maxY - minY)) * plotHeight;
+
+  const xAxis = createSvgNode("line", {
+    x1: margin.left,
+    y1: margin.top + plotHeight,
+    x2: margin.left + plotWidth,
+    y2: margin.top + plotHeight,
+    stroke: "#3a4b6b",
+    "stroke-width": "1",
+  });
+  const yAxis = createSvgNode("line", {
+    x1: margin.left,
+    y1: margin.top,
+    x2: margin.left,
+    y2: margin.top + plotHeight,
+    stroke: "#3a4b6b",
+    "stroke-width": "1",
+  });
+  svgElement.append(xAxis, yAxis);
+
+  for (let tick = 1; tick <= 3; tick += 1) {
+    const y = margin.top + (plotHeight * tick) / 4;
+    svgElement.append(
+      createSvgNode("line", {
+        x1: margin.left,
+        y1: y,
+        x2: margin.left + plotWidth,
+        y2: y,
+        stroke: "#25324b",
+        "stroke-width": "1",
+      }),
+    );
+  }
+
+  let pathData = "";
+  points.forEach((point, index) => {
+    const x = projectX(point.x);
+    const y = projectY(point.y);
+    pathData += `${index === 0 ? "M" : " L"}${x.toFixed(2)} ${y.toFixed(2)}`;
+  });
+  const path = createSvgNode("path", {
+    d: pathData,
+    fill: "none",
+    stroke: options.color ?? "#78a6ff",
+    "stroke-width": "2",
+    "stroke-linecap": "round",
+    "stroke-linejoin": "round",
+  });
+  svgElement.append(path);
+
+  for (const point of points) {
+    svgElement.append(
+      createSvgNode("circle", {
+        cx: projectX(point.x),
+        cy: projectY(point.y),
+        r: "2.2",
+        fill: options.color ?? "#78a6ff",
+      }),
+    );
+  }
+
+  const title = createSvgNode("text", {
+    x: margin.left,
+    y: 12,
+    fill: "#d6e3fc",
+    "font-size": "10",
+    "font-weight": "600",
+  });
+  title.textContent = options.title ?? "";
+  svgElement.append(title);
+}
+
+function createSvgNode(name, attributes) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [key, value] of Object.entries(attributes)) {
+    node.setAttribute(key, String(value));
+  }
+  return node;
+}
+
+function renderReleaseNotes(releases) {
+  if (!elements.releaseNotesList) {
+    return;
+  }
+  elements.releaseNotesList.replaceChildren();
+  const list = Array.isArray(releases)
+    ? releases.filter((release) => !release?.draft).slice(0, 5)
+    : [];
+  if (!list.length) {
+    const placeholder = document.createElement("li");
+    placeholder.className = "meta-line";
+    placeholder.textContent = "No release notes loaded yet.";
+    elements.releaseNotesList.append(placeholder);
+    return;
+  }
+
+  for (const release of list) {
+    const item = document.createElement("li");
+    const tag = String(release?.tag_name ?? release?.name ?? "Untitled release");
+    const dateMs = Date.parse(String(release?.published_at ?? ""));
+    const date = Number.isFinite(dateMs) ? new Date(dateMs).toLocaleDateString() : "Unknown date";
+    const summary = summarizeReleaseBody(release?.body);
+    const url = typeof release?.html_url === "string" ? release.html_url : null;
+    if (url) {
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = `${tag} (${date})`;
+      item.append(link);
+    } else {
+      const label = document.createElement("strong");
+      label.textContent = `${tag} (${date})`;
+      item.append(label);
+    }
+    const note = document.createElement("div");
+    note.className = "meta-line";
+    note.textContent = summary;
+    item.append(note);
+    elements.releaseNotesList.append(item);
+  }
+}
+
+function summarizeReleaseBody(body) {
+  if (typeof body !== "string" || !body.trim()) {
+    return "No notes provided.";
+  }
+  const lines = body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^[-*#\d.)\s]+/, ""))
+    .filter(Boolean)
+    .slice(0, 2);
+  const summary = lines.join(" • ");
+  if (!summary) {
+    return "No notes provided.";
+  }
+  return summary.length > 180 ? `${summary.slice(0, 177)}...` : summary;
+}
+
+function triggerDownload(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function toCsvCell(value) {
+  const text = String(value ?? "");
+  const escaped = text.replace(/"/g, "\"\"");
+  return /[",\n]/.test(escaped) ? `"${escaped}"` : escaped;
+}
+
+function makeTimestampTag() {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  const hh = String(now.getHours()).padStart(2, "0");
+  const min = String(now.getMinutes()).padStart(2, "0");
+  const ss = String(now.getSeconds()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}-${hh}${min}${ss}`;
 }
 
 function formatTime(timeMs) {
@@ -828,6 +1693,11 @@ function loadSolves() {
         id: typeof entry.id === "string" ? entry.id : crypto.randomUUID(),
         timeMs: Math.max(0, Math.round(entry.timeMs)),
         source: entry.source === "cube" ? "cube" : "manual",
+        methodDetected:
+          typeof entry.methodDetected === "string" && entry.methodDetected.trim()
+            ? entry.methodDetected.trim()
+            : "Unknown",
+        analysis: normalizeSolveAnalysis(entry.analysis, entry.timeMs),
         recordedAt:
           typeof entry.recordedAt === "string"
             ? entry.recordedAt
@@ -842,15 +1712,400 @@ function saveSolves(value) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
 }
 
-function pickLatestApkRelease(releases) {
-  return releases.find(
-    (release) =>
-      !release?.draft &&
-      Array.isArray(release?.assets) &&
-      release.assets.some((asset) =>
-        String(asset?.name ?? "").toLowerCase().endsWith(".apk"),
-      ),
+function openSolveAnalysis(solveId) {
+  const solve = solves.find((entry) => entry.id === solveId);
+  if (!solve) {
+    return;
+  }
+  selectedSolveId = solve.id;
+  renderSolveAnalysis(solve);
+  elements.solveAnalysisModal.classList.remove("hidden");
+}
+
+function closeSolveAnalysis() {
+  selectedSolveId = null;
+  elements.solveAnalysisModal.classList.add("hidden");
+}
+
+function renderSolveAnalysis(solve) {
+  const analysis = normalizeSolveAnalysis(solve.analysis, solve.timeMs);
+  elements.analysisTitle.textContent = `Solve ${formatTime(solve.timeMs)}`;
+  elements.analysisSummary.textContent = [
+    `Method: ${analysis.method}`,
+    `Moves: ${analysis.totalMoves}`,
+    `TPS: ${analysis.tps.toFixed(2)}`,
+    `Time: ${formatTime(solve.timeMs)}`,
+  ].join(" • ");
+
+  const details = document.createElement("div");
+  details.className = "analysis-grid";
+
+  const phasesHeader = document.createElement("h3");
+  phasesHeader.textContent = "Phase Breakdown";
+  details.append(phasesHeader);
+
+  const phaseList = document.createElement("ul");
+  phaseList.className = "analysis-phase-list";
+  for (const phase of analysis.phases) {
+    const li = document.createElement("li");
+    li.textContent = `${phase.name}: ${formatTime(phase.timeMs)} • ${phase.moves} moves`;
+    phaseList.append(li);
+  }
+  details.append(phaseList);
+
+  const distributionHeader = document.createElement("h3");
+  distributionHeader.textContent = "Move Distribution by Phase";
+  details.append(distributionHeader);
+  const distributionList = document.createElement("ul");
+  distributionList.className = "analysis-phase-list";
+  for (const phase of analysis.phases) {
+    const ratio = analysis.totalMoves > 0 ? (phase.moves / analysis.totalMoves) * 100 : 0;
+    const li = document.createElement("li");
+    li.textContent = `${phase.name}: ${phase.moves} moves (${ratio.toFixed(1)}%)`;
+    distributionList.append(li);
+  }
+  details.append(distributionList);
+
+  elements.analysisDetails.replaceChildren(details);
+}
+
+function createSolveTrack(source) {
+  activeSolveTrack = {
+    source,
+    startedAtPerf: performance.now(),
+    startedAtIso: new Date().toISOString(),
+    moves: [],
+    faceletTimeline: [],
+    lastPhase: "cross_f2l",
+  };
+}
+
+function closeSolveTrack(source, totalTimeMs) {
+  const track = activeSolveTrack;
+  activeSolveTrack = null;
+  if (!track || track.source !== source) {
+    return buildFallbackAnalysis(source, totalTimeMs);
+  }
+
+  const moveEntries = track.moves;
+  const totalMoves = moveEntries.length;
+
+  const method = detectSolveMethod(moveEntries, totalTimeMs);
+  const phases = buildPhaseStats(moveEntries, track.faceletTimeline, totalTimeMs, method);
+  return normalizeSolveAnalysis(
+    {
+      method,
+      totalMoves,
+      tps: totalTimeMs > 0 ? totalMoves / (totalTimeMs / 1000) : 0,
+      phases,
+    },
+    totalTimeMs,
   );
+}
+
+function captureSolveMoveEvent(moveToken, timestampMs) {
+  if (!timerRunning || !activeSolveTrack) {
+    return;
+  }
+  const move = normalizeMoveToken(moveToken) ?? String(moveToken ?? "").trim();
+  if (!move) {
+    return;
+  }
+  const offsetMs = Math.max(
+    0,
+    Number.isFinite(timestampMs) ? timestampMs - timerStartPerfMs : performance.now() - timerStartPerfMs,
+  );
+  activeSolveTrack.moves.push({
+    move,
+    offsetMs,
+  });
+}
+
+function captureSolveFaceletsEvent(facelets, timestampMs) {
+  if (!timerRunning || !activeSolveTrack) {
+    return;
+  }
+  const offsetMs = Math.max(
+    0,
+    Number.isFinite(timestampMs) ? timestampMs - timerStartPerfMs : performance.now() - timerStartPerfMs,
+  );
+  const phase = inferPhaseFromFacelets(facelets);
+  if (!phase) {
+    return;
+  }
+  const last = activeSolveTrack.faceletTimeline[activeSolveTrack.faceletTimeline.length - 1];
+  if (last && last.phase === phase && offsetMs - last.offsetMs < 120) {
+    return;
+  }
+  activeSolveTrack.faceletTimeline.push({ offsetMs, phase });
+}
+
+function inferPhaseFromFacelets(facelets) {
+  if (isFaceletsSolved(facelets)) {
+    return "solved";
+  }
+  if (typeof facelets !== "string" || facelets.length < 54) {
+    return null;
+  }
+
+  const solvedRef = SOLVED_FACELETS;
+  const dFaceStart = 27;
+  let dSolved = 0;
+  for (let i = 0; i < 9; i += 1) {
+    if (facelets[dFaceStart + i] === solvedRef[dFaceStart + i]) {
+      dSolved += 1;
+    }
+  }
+
+  const sideFaces = [9, 18, 36, 45];
+  let f2lSolved = 0;
+  let f2lTotal = 24;
+  for (const start of sideFaces) {
+    for (const idx of [3, 4, 5, 6, 7, 8]) {
+      if (facelets[start + idx] === solvedRef[start + idx]) {
+        f2lSolved += 1;
+      }
+    }
+  }
+  const f2lRatio = f2lTotal > 0 ? f2lSolved / f2lTotal : 0;
+  const uSolved = facelets.slice(0, 9).split("").every((char) => char === "U");
+
+  if (dSolved < 7 || f2lRatio < 0.45) {
+    return "cross_f2l";
+  }
+  if (!uSolved) {
+    return "oll";
+  }
+  return "pll";
+}
+
+function detectSolveMethod(moveEntries, totalTimeMs) {
+  const totalMoves = moveEntries.length;
+  if (!totalMoves) {
+    return "Unknown";
+  }
+  if (totalMoves < 8) {
+    return "Unknown (insufficient data)";
+  }
+  const counts = {
+    U: 0,
+    R: 0,
+    F: 0,
+    D: 0,
+    L: 0,
+    B: 0,
+    M: 0,
+    E: 0,
+    S: 0,
+    u: 0,
+    r: 0,
+    f: 0,
+    d: 0,
+    l: 0,
+    b: 0,
+    x: 0,
+    y: 0,
+    z: 0,
+  };
+  for (const { move } of moveEntries) {
+    const token = String(move ?? "").trim();
+    const face = token[0];
+    if (face in counts) {
+      counts[face] += 1;
+    }
+  }
+  const mRatio = counts.M / totalMoves;
+  const sliceRatio = (counts.M + counts.E + counts.S) / totalMoves;
+  const wideRatio = (counts.u + counts.r + counts.f + counts.d + counts.l + counts.b) / totalMoves;
+  const fbRatio = (counts.F + counts.B + counts.f + counts.b) / totalMoves;
+  const dRatio = (counts.D + counts.d) / totalMoves;
+  const rotationRatio = (counts.x + counts.y + counts.z) / totalMoves;
+  const doubleRatio =
+    moveEntries.reduce(
+      (accumulator, entry) => accumulator + (String(entry.move ?? "").includes("2") ? 1 : 0),
+      0,
+    ) / totalMoves;
+  const tps = totalTimeMs > 0 ? totalMoves / (totalTimeMs / 1000) : 0;
+
+  if (mRatio >= 0.14 || (sliceRatio >= 0.2 && dRatio < 0.12 && fbRatio < 0.22)) {
+    return "Roux (heuristic)";
+  }
+  if (dRatio >= 0.16 && mRatio < 0.08 && tps < 3.5) {
+    return "Minh Thai / Layer-by-layer (heuristic)";
+  }
+  if (wideRatio > 0.18 && rotationRatio > 0.06 && doubleRatio > 0.2) {
+    return "CFOP (heuristic)";
+  }
+  return "CFOP (heuristic)";
+}
+
+function buildPhaseStats(moveEntries, faceletTimeline, totalTimeMs, method) {
+  const phaseOrder =
+    method.startsWith("Roux") ? ROUX_PHASES : method.startsWith("Minh Thai") ? LBL_PHASES : CFOP_PHASES;
+  const phaseBuckets = phaseOrder.map((name) => ({ name, moves: 0, timeMs: 0 }));
+  const safeTotal = Math.max(0, Math.round(totalTimeMs));
+  let splitA = Math.floor(safeTotal * 0.65);
+  let splitB = Math.floor(safeTotal * 0.85);
+  if (method.startsWith("Roux")) {
+    splitA = Math.floor(safeTotal * 0.58);
+    splitB = Math.floor(safeTotal * 0.84);
+  } else if (method.startsWith("Minh Thai")) {
+    splitA = Math.floor(safeTotal * 0.68);
+    splitB = Math.floor(safeTotal * 0.9);
+  }
+
+  if (Array.isArray(faceletTimeline) && faceletTimeline.length > 1) {
+    const firstOll = faceletTimeline.find((entry) => entry.phase === "oll");
+    const firstPll = faceletTimeline.find(
+      (entry) => entry.phase === "pll" || entry.phase === "solved",
+    );
+    if (
+      Number.isFinite(firstOll?.offsetMs) &&
+      Number.isFinite(firstPll?.offsetMs) &&
+      firstPll.offsetMs > firstOll.offsetMs
+    ) {
+      splitA = Math.max(0, Math.min(safeTotal, Math.round(firstOll.offsetMs)));
+      splitB = Math.max(splitA, Math.min(safeTotal, Math.round(firstPll.offsetMs)));
+    }
+  }
+
+  const boundaries = [0, splitA, splitB, safeTotal];
+  const toBucketByTime = (offsetMs) => {
+    if (offsetMs < boundaries[1]) {
+      return 0;
+    }
+    if (offsetMs < boundaries[2]) {
+      return 1;
+    }
+    return 2;
+  };
+  const toBucketByFaceletPhase = (phase) => {
+    if (phase === "oll") {
+      return 1;
+    }
+    if (phase === "pll" || phase === "solved") {
+      return 2;
+    }
+    return 0;
+  };
+
+  const timeline = Array.isArray(faceletTimeline)
+    ? [...faceletTimeline].sort((left, right) => left.offsetMs - right.offsetMs)
+    : [];
+  let timelineIndex = 0;
+  for (const move of moveEntries) {
+    let bucket = toBucketByTime(move.offsetMs);
+    while (
+      timelineIndex + 1 < timeline.length &&
+      Number(timeline[timelineIndex + 1]?.offsetMs) <= Number(move.offsetMs)
+    ) {
+      timelineIndex += 1;
+    }
+    const phase = timeline[timelineIndex]?.phase;
+    if (phase) {
+      bucket = toBucketByFaceletPhase(phase);
+    }
+    phaseBuckets[Math.max(0, Math.min(phaseBuckets.length - 1, bucket))].moves += 1;
+  }
+
+  phaseBuckets[0].timeMs = Math.max(0, boundaries[1] - boundaries[0]);
+  phaseBuckets[1].timeMs = Math.max(0, boundaries[2] - boundaries[1]);
+  phaseBuckets[2].timeMs = Math.max(0, boundaries[3] - boundaries[2]);
+  return phaseBuckets;
+}
+
+function buildFallbackAnalysis(source, totalTimeMs) {
+  return normalizeSolveAnalysis(
+    {
+      method: source === "manual" ? "Manual / Unknown" : "Unknown",
+      totalMoves: 0,
+      tps: 0,
+      phases: CFOP_PHASES.map((name, index) => ({
+        name,
+        moves: 0,
+        timeMs: index === 0 ? totalTimeMs : 0,
+      })),
+    },
+    totalTimeMs,
+  );
+}
+
+function normalizeSolveAnalysis(analysis, totalTimeMs) {
+  const safeTotal = Math.max(0, Math.round(totalTimeMs ?? 0));
+  const method = typeof analysis?.method === "string" && analysis.method.trim()
+    ? analysis.method.trim()
+    : "Unknown";
+  const totalMoves = Number.isFinite(analysis?.totalMoves) ? Math.max(0, Math.round(analysis.totalMoves)) : 0;
+  const tps =
+    Number.isFinite(analysis?.tps) && analysis.tps >= 0
+      ? Number(analysis.tps)
+      : safeTotal > 0
+        ? totalMoves / (safeTotal / 1000)
+        : 0;
+
+  const defaultPhases = CFOP_PHASES.map((name, index) => ({
+    name,
+    moves: 0,
+    timeMs: index === 0 ? safeTotal : 0,
+  }));
+  const phases = Array.isArray(analysis?.phases) && analysis.phases.length
+    ? analysis.phases.map((phase) => ({
+        name: typeof phase?.name === "string" && phase.name.trim() ? phase.name.trim() : "Phase",
+        moves: Number.isFinite(phase?.moves) ? Math.max(0, Math.round(phase.moves)) : 0,
+        timeMs: Number.isFinite(phase?.timeMs) ? Math.max(0, Math.round(phase.timeMs)) : 0,
+      }))
+    : defaultPhases;
+
+  return {
+    method,
+    totalMoves,
+    tps,
+    phases,
+  };
+}
+
+function pickLatestApkRelease(releases) {
+  if (!Array.isArray(releases)) {
+    return null;
+  }
+  const candidates = [];
+  for (const release of releases) {
+    if (release?.draft || !Array.isArray(release?.assets)) {
+      continue;
+    }
+    const apkAsset = release.assets.find((asset) =>
+      String(asset?.name ?? "").toLowerCase().endsWith(".apk"),
+    );
+    if (!apkAsset) {
+      continue;
+    }
+    const version =
+      parseVersion(release.tag_name) ??
+      parseVersion(release.name) ??
+      parseVersion(apkAsset.name);
+    candidates.push({
+      release,
+      version,
+      published: new Date(release.published_at ?? 0).getTime(),
+    });
+  }
+  if (!candidates.length) {
+    return null;
+  }
+  candidates.sort((a, b) => {
+    if (a.version && b.version) {
+      const cmp = compareSemver(a.version, b.version);
+      if (cmp !== 0) {
+        return -cmp;
+      }
+    } else if (a.version) {
+      return -1;
+    } else if (b.version) {
+      return 1;
+    }
+    return b.published - a.published;
+  });
+  return candidates[0].release;
 }
 
 function parseVersion(value) {
@@ -983,6 +2238,70 @@ function inverseMoveToken(move) {
   return `${move}'`;
 }
 
+function consumeExpectedMove(expectedMove, observedMove) {
+  if (typeof expectedMove !== "string") {
+    return { handled: false, advanced: false, pending: null, pendingDirection: null, hint: null };
+  }
+
+  if (observedMove === expectedMove) {
+    return { handled: true, advanced: true, pending: null, pendingDirection: null, hint: null };
+  }
+
+  if (!expectedMove.endsWith("2")) {
+    return { handled: false, advanced: false, pending: null, pendingDirection: null, hint: null };
+  }
+
+  const face = expectedMove[0];
+  const quarterClockwise = face;
+  const quarterCounterClockwise = `${face}'`;
+  const isQuarterTurn =
+    observedMove === quarterClockwise || observedMove === quarterCounterClockwise;
+
+  if (!isQuarterTurn) {
+    return { handled: false, advanced: false, pending: null, pendingDirection: null, hint: null };
+  }
+
+  if (pendingDoubleMoveToken === expectedMove) {
+    if (observedMove === pendingDoubleMoveDirection) {
+      return { handled: true, advanced: true, pending: null, pendingDirection: null, hint: null };
+    }
+    if (observedMove === inverseMoveToken(pendingDoubleMoveDirection ?? "")) {
+      return {
+        handled: true,
+        advanced: false,
+        pending: null,
+        pendingDirection: null,
+        hint: `Half turn canceled for ${expectedMove}. Do ${expectedMove} (${quarterClockwise} ${quarterClockwise} or ${quarterCounterClockwise} ${quarterCounterClockwise}).`,
+      };
+    }
+    return { handled: false, advanced: false, pending: null, pendingDirection: null, hint: null };
+  }
+
+  return {
+    handled: true,
+    advanced: false,
+    pending: expectedMove,
+    pendingDirection: observedMove,
+    hint: `Half turn detected for ${expectedMove}. Do one more ${observedMove}.`,
+  };
+}
+
+function describeExpectedMove(move) {
+  if (typeof move !== "string" || !move) {
+    return "";
+  }
+
+  if (move.endsWith("2") && pendingDoubleMoveToken === move) {
+    return `${move} (one more ${pendingDoubleMoveDirection ?? "quarter turn"})`;
+  }
+
+  if (move.endsWith("2")) {
+    return `${move} (double turn)`;
+  }
+
+  return move;
+}
+
 function setUpdateStatus(message) {
   elements.updateStatus.textContent = message;
 }
@@ -997,4 +2316,832 @@ function setWorkflowStatus(message) {
 
 function setCubeSyncStatus(message) {
   elements.cubeSyncStatus.textContent = message;
+}
+
+function onHardwareEvent(event) {
+  if (typeof event?.gyroSupported === "boolean") {
+    // Keep explicit "true" from hardware info, but do not hard-lock to false:
+    // some models report false while still sending gyro events.
+    if (event.gyroSupported || orientationSupportedByCube === null) {
+      orientationSupportedByCube = event.gyroSupported;
+    }
+  } else if (orientationSupportedByCube === null) {
+    orientationSupportedByCube = true;
+  }
+  updateOrientationSyncStatus();
+  updateOrientationCalibrationStatus();
+  updateDebugGyroStatus();
+}
+
+function onGyroEvent(event) {
+  latestGyroQuaternion = normalizeQuaternion(event?.quaternion);
+  if (!latestGyroQuaternion) {
+    return;
+  }
+  if (orientationSupportedByCube !== true) {
+    orientationSupportedByCube = true;
+    updateOrientationSyncStatus();
+    updateOrientationCalibrationStatus();
+  }
+  recentGyroSamples.push(latestGyroQuaternion);
+  if (recentGyroSamples.length > 240) {
+    recentGyroSamples.splice(0, recentGyroSamples.length - 240);
+  }
+  debugGyroSampleCount += 1;
+  debugLastGyroEventAt = Date.now();
+  processGyroSample(latestGyroQuaternion);
+}
+
+function applyOrientationSyncPreference(enabled, options = {}) {
+  const { persist = true } = options;
+  orientationSyncEnabled = Boolean(enabled);
+  receivedOrientationSample = false;
+  cubeRenderer?.setOrientationSyncEnabled(orientationSyncEnabled);
+  elements.orientationSyncCheckbox.checked = orientationSyncEnabled;
+  if (persist) {
+    persistOrientationSyncPreference(orientationSyncEnabled);
+  }
+  updateOrientationSyncStatus();
+}
+
+function onDebugControlsChanged() {
+  debugRendererSyncEnabled = elements.debugEnableSyncCheckbox.checked;
+  debugUseCalibration = elements.debugUseCalibrationCheckbox.checked;
+  debugInvertGyro = elements.debugInvertGyroCheckbox.checked;
+  debugDeltaOrder =
+    elements.debugDeltaOrderSelect.value === DEBUG_DELTA_ORDER.REF_SENSOR
+      ? DEBUG_DELTA_ORDER.REF_SENSOR
+      : DEBUG_DELTA_ORDER.SENSOR_REF;
+  debugFramePreset = elements.debugFramePresetSelect.value || "none";
+
+  applyDebugControlState();
+
+  if (latestGyroQuaternion) {
+    processGyroSample(latestGyroQuaternion);
+  } else {
+    updateDebugGyroStatus();
+  }
+}
+
+function syncDebugControlsToUi() {
+  elements.debugEnableSyncCheckbox.checked = debugRendererSyncEnabled;
+  elements.debugUseCalibrationCheckbox.checked = debugUseCalibration;
+  elements.debugInvertGyroCheckbox.checked = debugInvertGyro;
+  elements.debugDeltaOrderSelect.value = debugDeltaOrder;
+  elements.debugFramePresetSelect.value = debugFramePreset;
+}
+
+function applyDebugControlState() {
+  cubeRenderer?.setSensorDeltaOrder(debugDeltaOrder);
+  debugCubeRenderer?.setSensorDeltaOrder(debugDeltaOrder);
+  debugCubeRenderer?.setOrientationSyncEnabled(debugRendererSyncEnabled);
+  resetDebugOrientationReferences();
+  updateDebugGyroStatus();
+}
+
+function resetDebugOrientationReferences() {
+  cubeRenderer?.resetOrientationSyncReference();
+  debugCubeRenderer?.resetOrientationSyncReference();
+  receivedOrientationSample = false;
+  updateOrientationSyncStatus();
+}
+
+function processGyroSample(rawQuaternion) {
+  const raw = normalizeQuaternion(rawQuaternion);
+  if (!raw) {
+    return;
+  }
+  const finalQuaternion = buildFinalGyroQuaternion(raw);
+  if (!finalQuaternion) {
+    renderDebugGyroData(raw, null);
+    return;
+  }
+
+  let mainApplied = false;
+  if (orientationSyncEnabled) {
+    mainApplied = Boolean(cubeRenderer?.syncOrientationToQuaternion(finalQuaternion));
+  }
+  if (mainApplied) {
+    receivedOrientationSample = true;
+    updateOrientationSyncStatus();
+  }
+
+  let debugApplied = false;
+  if (debugRendererSyncEnabled) {
+    debugApplied = Boolean(debugCubeRenderer?.syncOrientationToQuaternion(finalQuaternion));
+  }
+
+  renderDebugGyroData(raw, finalQuaternion, { mainApplied, debugApplied });
+}
+
+function buildFinalGyroQuaternion(rawQuaternion) {
+  let transformed = normalizeQuaternion(rawQuaternion);
+  if (!transformed) {
+    return null;
+  }
+  if (debugInvertGyro) {
+    transformed = invertQuaternion(transformed);
+  }
+  transformed = applyDebugFramePreset(transformed, debugFramePreset);
+  if (debugUseCalibration) {
+    transformed = applyCalibrationToQuaternion(transformed);
+  }
+  return normalizeQuaternion(transformed);
+}
+
+function applyDebugFramePreset(quaternion, preset) {
+  const base = normalizeQuaternion(quaternion);
+  if (!base) {
+    return null;
+  }
+  const transform = getDebugPresetQuaternion(preset);
+  if (!transform) {
+    return base;
+  }
+  return multiplyQuaternions(transform, base);
+}
+
+function getDebugPresetQuaternion(preset) {
+  switch (preset) {
+    case "x90":
+      return quaternionFromAxisAngle({ x: 1, y: 0, z: 0 }, Math.PI / 2);
+    case "x-90":
+      return quaternionFromAxisAngle({ x: 1, y: 0, z: 0 }, -Math.PI / 2);
+    case "y90":
+      return quaternionFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 2);
+    case "y-90":
+      return quaternionFromAxisAngle({ x: 0, y: 1, z: 0 }, -Math.PI / 2);
+    case "z90":
+      return quaternionFromAxisAngle({ x: 0, y: 0, z: 1 }, Math.PI / 2);
+    case "z-90":
+      return quaternionFromAxisAngle({ x: 0, y: 0, z: 1 }, -Math.PI / 2);
+    case "x180":
+      return quaternionFromAxisAngle({ x: 1, y: 0, z: 0 }, Math.PI);
+    case "y180":
+      return quaternionFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI);
+    case "z180":
+      return quaternionFromAxisAngle({ x: 0, y: 0, z: 1 }, Math.PI);
+    case "none":
+    default:
+      return null;
+  }
+}
+
+function updateDebugGyroStatus() {
+  if (!cubeConnection) {
+    elements.debugGyroStatus.textContent = "Debug: connect cube to inspect gyro stream.";
+    return;
+  }
+  if (orientationSupportedByCube === false) {
+    elements.debugGyroStatus.textContent = "Debug: cube reports no orientation support.";
+    return;
+  }
+  if (!latestGyroQuaternion) {
+    elements.debugGyroStatus.textContent = "Debug: waiting for gyro samples...";
+    return;
+  }
+  elements.debugGyroStatus.textContent = debugRendererSyncEnabled
+    ? "Debug: streaming gyro samples to debug render."
+    : "Debug: samples received (debug render sync disabled).";
+}
+
+function renderDebugGyroData(rawQuaternion, finalQuaternion, meta = {}) {
+  elements.debugGyroSampleCount.textContent = String(debugGyroSampleCount);
+  elements.debugLastEventAge.textContent = debugLastGyroEventAt
+    ? new Date(debugLastGyroEventAt).toLocaleTimeString()
+    : "never";
+  elements.debugRawQuaternion.textContent = formatQuaternion(rawQuaternion);
+  elements.debugFinalQuaternion.textContent = formatQuaternion(finalQuaternion);
+  elements.debugRawUp.textContent = formatVector3(
+    rawQuaternion ? rotateVectorByQuaternion({ x: 0, y: 0, z: 1 }, rawQuaternion) : null,
+  );
+  elements.debugFinalUp.textContent = formatVector3(
+    finalQuaternion ? rotateVectorByQuaternion({ x: 0, y: 0, z: 1 }, finalQuaternion) : null,
+  );
+  updateDebugGyroStatus();
+  if (meta.mainApplied || meta.debugApplied) {
+    elements.debugGyroStatus.textContent += ` (main:${meta.mainApplied ? "on" : "off"} debug:${meta.debugApplied ? "on" : "off"})`;
+  }
+}
+
+function formatQuaternion(quaternion) {
+  const q = normalizeQuaternion(quaternion);
+  if (!q) {
+    return "-";
+  }
+  return `x:${q.x.toFixed(4)} y:${q.y.toFixed(4)} z:${q.z.toFixed(4)} w:${q.w.toFixed(4)}`;
+}
+
+function formatVector3(vector) {
+  const v = normalizeVector3(vector);
+  if (!v) {
+    return "-";
+  }
+  return `x:${v.x.toFixed(4)} y:${v.y.toFixed(4)} z:${v.z.toFixed(4)}`;
+}
+
+function updateOrientationSyncStatus() {
+  if (!orientationSyncEnabled) {
+    elements.orientationSyncStatus.textContent = "Orientation sync: off";
+    return;
+  }
+  if (!cubeConnection) {
+    elements.orientationSyncStatus.textContent =
+      "Orientation sync: waiting for cube connection";
+    return;
+  }
+  if (orientationSupportedByCube === false) {
+    elements.orientationSyncStatus.textContent =
+      "Orientation sync: this cube does not report orientation";
+    return;
+  }
+  if (!receivedOrientationSample) {
+    elements.orientationSyncStatus.textContent =
+      "Orientation sync: waiting for accelerometer data";
+    return;
+  }
+  elements.orientationSyncStatus.textContent = "Orientation sync: active";
+}
+
+function updateOrientationCalibrationStatus(messageOverride = null) {
+  if (messageOverride) {
+    elements.orientationCalibrationStatus.textContent = messageOverride;
+    renderCalibrationButtons();
+    return;
+  }
+  if (!cubeConnection) {
+    elements.orientationCalibrationStatus.textContent =
+      "Calibration: connect cube, then place each face up in sequence U, R, F, D, L, B.";
+    renderCalibrationButtons();
+    return;
+  }
+  if (orientationSupportedByCube === false) {
+    elements.orientationCalibrationStatus.textContent =
+      "Calibration unavailable: cube does not report orientation data.";
+    renderCalibrationButtons();
+    return;
+  }
+  if (orientationCalibrationSession?.phase === "capturing") {
+    const face = CALIBRATION_FACE_SEQUENCE[orientationCalibrationSession.index] ?? "";
+    elements.orientationCalibrationStatus.textContent =
+      `Calibration step ${orientationCalibrationSession.index + 1}/${CALIBRATION_FACE_SEQUENCE.length}: place ${face} face up, keep still, then tap Capture.`;
+    renderCalibrationButtons();
+    return;
+  }
+  if (hasNonIdentityCalibration()) {
+    elements.orientationCalibrationStatus.textContent =
+      "Calibration saved. Orientation sync uses calibrated correction.";
+    renderCalibrationButtons();
+    return;
+  }
+  elements.orientationCalibrationStatus.textContent =
+    "No calibration saved. Default orientation mapping is active.";
+  renderCalibrationButtons();
+}
+
+function renderCalibrationButtons() {
+  const capturing = orientationCalibrationSession?.phase === "capturing";
+  const canCalibrate = Boolean(cubeConnection) && orientationSupportedByCube !== false;
+  elements.startOrientationCalibrationBtn.disabled = !canCalibrate || capturing;
+  elements.captureOrientationCalibrationBtn.disabled = !canCalibrate || !capturing;
+  elements.resetOrientationCalibrationBtn.disabled = !hasNonIdentityCalibration() && !capturing;
+}
+
+function renderRememberedCubesStatus() {
+  const lastCube = getLastCube();
+  if (!knownCubes.length || !lastCube) {
+    elements.rememberedCubesStatus.textContent = "Remembered cubes: none";
+    return;
+  }
+
+  elements.rememberedCubesStatus.textContent = `Remembered cubes: ${knownCubes.length} • Last: ${lastCube.name}`;
+}
+
+function updateAutoConnectPreference(enabled) {
+  window.localStorage.setItem(AUTO_CONNECT_LAST_CUBE_KEY, enabled ? "1" : "0");
+}
+
+function loadAutoConnectPreference() {
+  return window.localStorage.getItem(AUTO_CONNECT_LAST_CUBE_KEY) !== "0";
+}
+
+function persistOrientationSyncPreference(enabled) {
+  window.localStorage.setItem(ORIENTATION_SYNC_KEY, enabled ? "1" : "0");
+}
+
+function loadOrientationSyncPreference() {
+  return window.localStorage.getItem(ORIENTATION_SYNC_KEY) === "1";
+}
+
+function persistOrientationCalibrationCorrection(quaternion) {
+  const normalized = normalizeQuaternion(quaternion);
+  if (!normalized) {
+    return;
+  }
+  window.localStorage.setItem(ORIENTATION_CALIBRATION_KEY, JSON.stringify(normalized));
+}
+
+function clearOrientationCalibrationCorrection() {
+  window.localStorage.removeItem(ORIENTATION_CALIBRATION_KEY);
+}
+
+function loadOrientationCalibrationCorrection() {
+  const raw = window.localStorage.getItem(ORIENTATION_CALIBRATION_KEY);
+  if (!raw) {
+    return identityQuaternion();
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return normalizeQuaternion(parsed) ?? identityQuaternion();
+  } catch {
+    return identityQuaternion();
+  }
+}
+
+function hasNonIdentityCalibration() {
+  return !quaternionApproxEquals(orientationCalibrationCorrection, identityQuaternion(), 0.0015);
+}
+
+function sampleCurrentQuaternion(count) {
+  if (recentGyroSamples.length < count) {
+    return [];
+  }
+  return recentGyroSamples.slice(-count);
+}
+
+function invertQuaternion(quaternion) {
+  const normalized = normalizeQuaternion(quaternion);
+  if (!normalized) {
+    return identityQuaternion();
+  }
+  return {
+    x: -normalized.x,
+    y: -normalized.y,
+    z: -normalized.z,
+    w: normalized.w,
+  };
+}
+
+function averageQuaternions(samples) {
+  if (!Array.isArray(samples) || !samples.length) {
+    return null;
+  }
+  const first = normalizeQuaternion(samples[0]);
+  if (!first) {
+    return null;
+  }
+  let sx = 0;
+  let sy = 0;
+  let sz = 0;
+  let sw = 0;
+  for (const sample of samples) {
+    const q = normalizeQuaternion(sample);
+    if (!q) {
+      continue;
+    }
+    const dot = first.x * q.x + first.y * q.y + first.z * q.z + first.w * q.w;
+    const sign = dot < 0 ? -1 : 1;
+    sx += q.x * sign;
+    sy += q.y * sign;
+    sz += q.z * sign;
+    sw += q.w * sign;
+  }
+  return normalizeQuaternion({
+    x: sx,
+    y: sy,
+    z: sz,
+    w: sw,
+  });
+}
+
+function solveCalibrationCorrection(samplesByFace) {
+  const worldUp = { x: 0, y: 0, z: 1 };
+  const correctionCandidates = [];
+  const orientationChecks = [];
+  for (const face of CALIBRATION_FACE_SEQUENCE) {
+    const sample = normalizeQuaternion(samplesByFace[face]);
+    if (!sample) {
+      return null;
+    }
+    const faceAxis = ORIENTATION_AXIS_REFERENCE[face];
+    const observedFaceUp = rotateVectorByQuaternion(faceAxis, sample);
+    const correctionForFace = computeQuaternionFromVectors(observedFaceUp, worldUp);
+    if (!correctionForFace) {
+      return null;
+    }
+    correctionCandidates.push(correctionForFace);
+
+    const observedWorldAxis = rotateVectorByQuaternion(worldUp, sample);
+    if (!observedWorldAxis) {
+      return null;
+    }
+    orientationChecks.push({ sample, faceAxis, observedWorldAxis });
+  }
+  const correction = averageQuaternions(correctionCandidates);
+  if (!correction) {
+    return null;
+  }
+
+  // Validate using both calibration constraints:
+  // 1) selected face maps to world up after correction
+  // 2) world-up expressed in cube coordinates maps to the expected face axis
+  for (const check of orientationChecks) {
+    const alignedFaceUp = rotateVectorByQuaternion(check.observedFaceUp, correction);
+    if (!alignedFaceUp || dotVector3(alignedFaceUp, worldUp) < 0.92) {
+      return null;
+    }
+    const correctedSample = multiplyQuaternions(correction, check.sample);
+    const reconstructedAxis = rotateVectorByQuaternion(worldUp, correctedSample);
+    if (!reconstructedAxis || dotVector3(reconstructedAxis, check.faceAxis) < 0.92) {
+      return null;
+    }
+  }
+
+  return correction;
+}
+
+function applyCalibrationToQuaternion(quaternion) {
+  const normalized = normalizeQuaternion(quaternion);
+  if (!normalized) {
+    return null;
+  }
+  return multiplyQuaternions(orientationCalibrationCorrection, normalized);
+}
+
+function identityQuaternion() {
+  return { x: 0, y: 0, z: 0, w: 1 };
+}
+
+function quaternionApproxEquals(a, b, epsilon = 0.001) {
+  const qa = normalizeQuaternion(a);
+  const qb = normalizeQuaternion(b);
+  if (!qa || !qb) {
+    return false;
+  }
+  const dot = Math.abs(qa.x * qb.x + qa.y * qb.y + qa.z * qb.z + qa.w * qb.w);
+  return Math.abs(1 - dot) <= epsilon;
+}
+
+function normalizeQuaternion(quaternion) {
+  if (!quaternion || typeof quaternion !== "object") {
+    return null;
+  }
+  const x = Number(quaternion.x);
+  const y = Number(quaternion.y);
+  const z = Number(quaternion.z);
+  const w = Number(quaternion.w);
+  if (![x, y, z, w].every((value) => Number.isFinite(value))) {
+    return null;
+  }
+  const magnitude = Math.hypot(x, y, z, w);
+  if (magnitude < 1e-8) {
+    return null;
+  }
+  return {
+    x: x / magnitude,
+    y: y / magnitude,
+    z: z / magnitude,
+    w: w / magnitude,
+  };
+}
+
+function multiplyQuaternions(left, right) {
+  const a = normalizeQuaternion(left);
+  const b = normalizeQuaternion(right);
+  if (!a || !b) {
+    return identityQuaternion();
+  }
+  return normalizeQuaternion({
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+  });
+}
+
+function quaternionFromAxisAngle(axis, angleRad) {
+  const normalizedAxis = normalizeVector3(axis);
+  if (!normalizedAxis || !Number.isFinite(angleRad)) {
+    return null;
+  }
+  const half = angleRad / 2;
+  const sinHalf = Math.sin(half);
+  const cosHalf = Math.cos(half);
+  return normalizeQuaternion({
+    x: normalizedAxis.x * sinHalf,
+    y: normalizedAxis.y * sinHalf,
+    z: normalizedAxis.z * sinHalf,
+    w: cosHalf,
+  });
+}
+
+function rotateVectorByQuaternion(vector, quaternion) {
+  const q = normalizeQuaternion(quaternion);
+  if (!q) {
+    return null;
+  }
+  const p = { x: vector.x, y: vector.y, z: vector.z, w: 0 };
+  const qInv = { x: -q.x, y: -q.y, z: -q.z, w: q.w };
+  const rotated = multiplyQuaternions(multiplyQuaternions(q, p), qInv);
+  return normalizeVector3(rotated);
+}
+
+function normalizeVector3(vector) {
+  if (!vector) {
+    return null;
+  }
+  const x = Number(vector.x);
+  const y = Number(vector.y);
+  const z = Number(vector.z);
+  if (![x, y, z].every((value) => Number.isFinite(value))) {
+    return null;
+  }
+  const magnitude = Math.hypot(x, y, z);
+  if (magnitude < 1e-8) {
+    return null;
+  }
+  return { x: x / magnitude, y: y / magnitude, z: z / magnitude };
+}
+
+function crossVector3(a, b) {
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  };
+}
+
+function dotVector3(a, b) {
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+function computeQuaternionFromVectors(fromVector, toVector) {
+  const from = normalizeVector3(fromVector);
+  const to = normalizeVector3(toVector);
+  if (!from || !to) {
+    return null;
+  }
+  const dot = dotVector3(from, to);
+  if (dot > 0.999999) {
+    return identityQuaternion();
+  }
+  if (dot < -0.999999) {
+    // Vectors are opposite; pick an orthogonal axis.
+    const referenceAxis =
+      Math.abs(from.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+    const axis = normalizeVector3(crossVector3(from, referenceAxis));
+    if (!axis) {
+      return null;
+    }
+    return normalizeQuaternion({
+      x: axis.x,
+      y: axis.y,
+      z: axis.z,
+      w: 0,
+    });
+  }
+  const axis = crossVector3(from, to);
+  return normalizeQuaternion({
+    x: axis.x,
+    y: axis.y,
+    z: axis.z,
+    w: 1 + dot,
+  });
+}
+
+function orthonormalBasis(xAxis, yHint) {
+  const x = normalizeVector3(xAxis);
+  if (!x) {
+    return null;
+  }
+  const yProjected = {
+    x: yHint.x - dotVector3(yHint, x) * x.x,
+    y: yHint.y - dotVector3(yHint, x) * x.y,
+    z: yHint.z - dotVector3(yHint, x) * x.z,
+  };
+  const y = normalizeVector3(yProjected);
+  if (!y) {
+    return null;
+  }
+  const z = normalizeVector3(crossVector3(x, y));
+  if (!z) {
+    return null;
+  }
+  return { x, y, z };
+}
+
+function matrixFromBasis(basis) {
+  return [
+    [basis.x.x, basis.y.x, basis.z.x],
+    [basis.x.y, basis.y.y, basis.z.y],
+    [basis.x.z, basis.y.z, basis.z.z],
+  ];
+}
+
+function transposeMatrix3(m) {
+  return [
+    [m[0][0], m[1][0], m[2][0]],
+    [m[0][1], m[1][1], m[2][1]],
+    [m[0][2], m[1][2], m[2][2]],
+  ];
+}
+
+function multiplyMatrix3(a, b) {
+  const out = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+  for (let row = 0; row < 3; row += 1) {
+    for (let col = 0; col < 3; col += 1) {
+      out[row][col] =
+        a[row][0] * b[0][col] +
+        a[row][1] * b[1][col] +
+        a[row][2] * b[2][col];
+    }
+  }
+  return out;
+}
+
+function quaternionFromRotationMatrix(matrix) {
+  const m00 = matrix[0][0];
+  const m01 = matrix[0][1];
+  const m02 = matrix[0][2];
+  const m10 = matrix[1][0];
+  const m11 = matrix[1][1];
+  const m12 = matrix[1][2];
+  const m20 = matrix[2][0];
+  const m21 = matrix[2][1];
+  const m22 = matrix[2][2];
+  const trace = m00 + m11 + m22;
+  if (trace > 0) {
+    const s = Math.sqrt(trace + 1) * 2;
+    return {
+      w: 0.25 * s,
+      x: (m21 - m12) / s,
+      y: (m02 - m20) / s,
+      z: (m10 - m01) / s,
+    };
+  }
+  if (m00 > m11 && m00 > m22) {
+    const s = Math.sqrt(1 + m00 - m11 - m22) * 2;
+    return {
+      w: (m21 - m12) / s,
+      x: 0.25 * s,
+      y: (m01 + m10) / s,
+      z: (m02 + m20) / s,
+    };
+  }
+  if (m11 > m22) {
+    const s = Math.sqrt(1 + m11 - m00 - m22) * 2;
+    return {
+      w: (m02 - m20) / s,
+      x: (m01 + m10) / s,
+      y: 0.25 * s,
+      z: (m12 + m21) / s,
+    };
+  }
+  const s = Math.sqrt(1 + m22 - m00 - m11) * 2;
+  return {
+    w: (m10 - m01) / s,
+    x: (m02 + m20) / s,
+    y: (m12 + m21) / s,
+    z: 0.25 * s,
+  };
+}
+
+function rememberConnectedCube(connection) {
+  const name = String(connection?.deviceName ?? "").trim();
+  const id = String(connection?.deviceMAC ?? "").trim().toUpperCase();
+  if (!name || !id) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const existing = knownCubes.findIndex((cube) => cube.id === id);
+  if (existing >= 0) {
+    knownCubes[existing] = {
+      ...knownCubes[existing],
+      name,
+      lastSeenAt: now,
+    };
+  } else {
+    knownCubes.push({
+      id,
+      name,
+      lastSeenAt: now,
+    });
+  }
+  saveKnownCubes(knownCubes);
+  saveLastCube({
+    id,
+    name,
+    lastSeenAt: now,
+  });
+  renderRememberedCubesStatus();
+}
+
+function getLastCube() {
+  const raw = window.localStorage.getItem(LAST_CUBE_KEY);
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.id !== "string" || !parsed.id.trim()) {
+      return null;
+    }
+    return {
+      id: parsed.id.trim().toUpperCase(),
+      name: typeof parsed.name === "string" ? parsed.name : "Last cube",
+      lastSeenAt:
+        typeof parsed.lastSeenAt === "string"
+          ? parsed.lastSeenAt
+          : new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveLastCube(cube) {
+  window.localStorage.setItem(LAST_CUBE_KEY, JSON.stringify(cube));
+}
+
+function forgetLastCube() {
+  window.localStorage.removeItem(LAST_CUBE_KEY);
+}
+
+function forgetKnownCubes() {
+  window.localStorage.removeItem(KNOWN_CUBES_KEY);
+}
+
+async function maybeAutoConnectLastCube() {
+  if (autoConnectAttempted || autoConnectInProgress) {
+    return;
+  }
+  if (!nativeBluetoothActive) {
+    return;
+  }
+  const lastCube = getLastCube();
+  if (!lastCube?.id) {
+    return;
+  }
+
+  autoConnectAttempted = true;
+  autoConnectInProgress = true;
+  try {
+    await connectToCube({
+      usePreferredDevice: true,
+      suppressPickerOnFailure: true,
+      userInitiated: false,
+    });
+  } finally {
+    autoConnectInProgress = false;
+  }
+}
+
+function isNativeRuntime() {
+  const cap = window.Capacitor;
+  if (!cap) {
+    return false;
+  }
+  if (typeof cap.isNativePlatform === "function") {
+    return cap.isNativePlatform();
+  }
+  const platform =
+    typeof cap.getPlatform === "function" ? cap.getPlatform() : String(cap.platform ?? "");
+  return platform === "android" || platform === "ios";
+}
+
+function loadKnownCubes() {
+  const raw = window.localStorage.getItem(KNOWN_CUBES_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .map((entry) => ({
+        id: typeof entry?.id === "string" ? entry.id.trim().toUpperCase() : "",
+        name:
+          typeof entry?.name === "string" && entry.name.trim().length > 0
+            ? entry.name.trim()
+            : "GAN Cube",
+        lastSeenAt:
+          typeof entry?.lastSeenAt === "string"
+            ? entry.lastSeenAt
+            : new Date().toISOString(),
+      }))
+      .filter((entry) => Boolean(entry.id));
+  } catch {
+    return [];
+  }
+}
+
+function saveKnownCubes(value) {
+  window.localStorage.setItem(KNOWN_CUBES_KEY, JSON.stringify(value));
 }
