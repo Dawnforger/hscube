@@ -10,6 +10,7 @@
     <div id="drawer-backdrop" class="drawer-backdrop hidden"></div>
     <aside id="side-drawer" class="side-drawer">
       <p class="drawer-title">Navigation</p>
+      <button id="nav-configs-btn" class="drawer-link">Configs</button>
       <button id="nav-pairing-btn" class="drawer-link">Pairing</button>
       <button id="nav-solve-btn" class="drawer-link active">Solve</button>
       <button id="nav-records-btn" class="drawer-link">Records</button>
@@ -29,6 +30,23 @@
           </div>
         </div>
       </header>
+
+      <section id="configs-screen" class="screen">
+        <section class="card">
+          <h2>Scramble + Inspection Configs</h2>
+          <div class="workflow-grid">
+            <label class="toggle-label" for="scramble-exclude-back-checkbox">
+              <input id="scramble-exclude-back-checkbox" type="checkbox" />
+              Exclude back-face moves from alg scramble (B/B'/B2)
+            </label>
+            <label class="toggle-label" for="auto-start-inspection-checkbox">
+              <input id="auto-start-inspection-checkbox" type="checkbox" />
+              Auto-start inspection after completing alg scramble
+            </label>
+          </div>
+          <p id="configs-status" class="meta-line">Configs saved locally on this device.</p>
+        </section>
+      </section>
 
       <section id="pairing-screen" class="screen">
         <section class="card connection-card">
