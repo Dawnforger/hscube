@@ -10,6 +10,8 @@ const STORAGE_KEY = "hs-cube-solves-v1";
 const KNOWN_CUBES_KEY = "gan-smartcube-known-cubes-v1";
 const LAST_CUBE_KEY = "gan-smartcube-last-cube-v1";
 const AUTO_CONNECT_LAST_CUBE_KEY = "gan-smartcube-auto-connect-last-cube-v1";
+const SCRAMBLE_EXCLUDE_BACK_KEY = "hs-cube-scramble-exclude-back-v1";
+const AUTO_START_INSPECTION_AFTER_ALG_KEY = "hs-cube-auto-start-inspection-after-alg-v1";
 const ORIENTATION_SYNC_KEY = "hs-cube-orientation-sync-v1";
 const ORIENTATION_CALIBRATION_KEY = "hs-cube-orientation-calibration-v1";
 const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.0.0";
@@ -59,12 +61,14 @@ const elements = {
   menuToggleBtn: document.querySelector("#menu-toggle-btn"),
   sideDrawer: document.querySelector("#side-drawer"),
   drawerBackdrop: document.querySelector("#drawer-backdrop"),
+  navConfigsBtn: document.querySelector("#nav-configs-btn"),
   navPairingBtn: document.querySelector("#nav-pairing-btn"),
   navSolveBtn: document.querySelector("#nav-solve-btn"),
   navRecordsBtn: document.querySelector("#nav-records-btn"),
   navCalibrationBtn: document.querySelector("#nav-calibration-btn"),
   navDebugBtn: document.querySelector("#nav-debug-btn"),
   navUpdatesBtn: document.querySelector("#nav-updates-btn"),
+  configsScreen: document.querySelector("#configs-screen"),
   pairingScreen: document.querySelector("#pairing-screen"),
   solveScreen: document.querySelector("#solve-screen"),
   recordsScreen: document.querySelector("#records-screen"),
@@ -88,6 +92,9 @@ const elements = {
   workflowStatus: document.querySelector("#workflow-status"),
   scrambleDisplay: document.querySelector("#scramble-display"),
   scrambleProgress: document.querySelector("#scramble-progress"),
+  scrambleExcludeBackCheckbox: document.querySelector("#scramble-exclude-back-checkbox"),
+  autoStartInspectionCheckbox: document.querySelector("#auto-start-inspection-checkbox"),
+  configsStatus: document.querySelector("#configs-status"),
   totalSolves: document.querySelector("#total-solves"),
   ao5Value: document.querySelector("#ao5-value"),
   recordsMethodFilter: document.querySelector("#records-method-filter"),
@@ -172,6 +179,8 @@ let debugLastGyroEventAt = null;
 let workflowPhase = WORKFLOW_PHASE.IDLE;
 let scrambleMode = SCRAMBLE_MODE.ALG;
 let inspectionSeconds = 15;
+let scrambleExcludeBackMoves = false;
+let autoStartInspectionAfterAlg = false;
 let scrambleMoves = [];
 let scrambleStep = 0;
 let pendingDoubleMoveToken = null;
@@ -191,6 +200,7 @@ elements.disconnectBtn.addEventListener("click", () => {
 });
 elements.menuToggleBtn.addEventListener("click", toggleDrawer);
 elements.drawerBackdrop.addEventListener("click", closeDrawer);
+elements.navConfigsBtn.addEventListener("click", () => switchScreen("configs"));
 elements.navPairingBtn.addEventListener("click", () => switchScreen("pairing"));
 elements.navSolveBtn.addEventListener("click", () => switchScreen("solve"));
 elements.navRecordsBtn.addEventListener("click", () => switchScreen("records"));
@@ -208,6 +218,8 @@ elements.prepareSolveBtn.addEventListener("click", () => {
 elements.startInspectionBtn.addEventListener("click", () => startInspection());
 elements.scrambleModeSelect.addEventListener("change", onWorkflowConfigChange);
 elements.inspectionSecondsInput.addEventListener("change", onWorkflowConfigChange);
+elements.scrambleExcludeBackCheckbox.addEventListener("change", onConfigOptionsChange);
+elements.autoStartInspectionCheckbox.addEventListener("change", onConfigOptionsChange);
 elements.clearSolvesBtn.addEventListener("click", clearSolves);
 elements.recordsMethodFilter.addEventListener("change", renderSolves);
 elements.recordsSortSelect.addEventListener("change", renderSolves);
@@ -260,6 +272,9 @@ async function bootstrap() {
   debugCubeRenderer = createCubeRenderer(elements.debugCubeViewport);
   debugCubeRenderer.updateFromFacelets(currentFacelets);
   orientationCalibrationCorrection = loadOrientationCalibrationCorrection();
+  scrambleExcludeBackMoves = loadScrambleExcludeBackPreference();
+  autoStartInspectionAfterAlg = loadAutoStartInspectionAfterAlgPreference();
+  syncConfigOptionsToUi();
   syncDebugControlsToUi();
   applyDebugControlState();
   renderDebugGyroData(null, null);
@@ -536,7 +551,9 @@ async function prepareSolveCycle() {
     elements.startInspectionBtn.disabled = false;
   } else {
     workflowPhase = connected ? WORKFLOW_PHASE.SCRAMBLING : WORKFLOW_PHASE.READY_INSPECTION;
-    scrambleMoves = generateScramble(SCRAMBLE_LENGTH);
+    scrambleMoves = generateScramble(SCRAMBLE_LENGTH, {
+      excludeBackMoves: scrambleExcludeBackMoves,
+    });
     elements.startInspectionBtn.disabled = connected;
     updateScrambleProgressText();
     setWorkflowStatus(
@@ -603,13 +620,20 @@ function handleAlgScrambleMove(moveToken) {
     scrambleStep += 1;
     if (scrambleStep >= scrambleMoves.length) {
       workflowPhase = WORKFLOW_PHASE.READY_INSPECTION;
-      setWorkflowStatus("Scramble complete. Tap Start Inspection.");
       elements.startInspectionBtn.disabled = false;
+      if (autoStartInspectionAfterAlg) {
+        setWorkflowStatus("Scramble complete. Starting inspection automatically...");
+      } else {
+        setWorkflowStatus("Scramble complete. Tap Start Inspection.");
+      }
     } else {
       setWorkflowStatus(`Good. Next move: ${describeExpectedMove(scrambleMoves[scrambleStep])}`);
     }
     updateScrambleProgressText();
     renderWorkflow();
+    if (scrambleStep >= scrambleMoves.length && autoStartInspectionAfterAlg) {
+      startInspection();
+    }
     return;
   }
 
@@ -775,6 +799,24 @@ function onWorkflowConfigChange() {
   }
 }
 
+function onConfigOptionsChange() {
+  scrambleExcludeBackMoves = Boolean(elements.scrambleExcludeBackCheckbox.checked);
+  autoStartInspectionAfterAlg = Boolean(elements.autoStartInspectionCheckbox.checked);
+  persistScrambleExcludeBackPreference(scrambleExcludeBackMoves);
+  persistAutoStartInspectionAfterAlgPreference(autoStartInspectionAfterAlg);
+  const backMovesLabel = scrambleExcludeBackMoves ? "B-face moves excluded" : "B-face moves allowed";
+  const autoStartLabel = autoStartInspectionAfterAlg ? "auto-start on alg complete" : "manual start";
+  elements.configsStatus.textContent = `Configs saved: ${backMovesLabel}, ${autoStartLabel}.`;
+}
+
+function syncConfigOptionsToUi() {
+  elements.scrambleExcludeBackCheckbox.checked = scrambleExcludeBackMoves;
+  elements.autoStartInspectionCheckbox.checked = autoStartInspectionAfterAlg;
+  const backMovesLabel = scrambleExcludeBackMoves ? "B-face moves excluded" : "B-face moves allowed";
+  const autoStartLabel = autoStartInspectionAfterAlg ? "auto-start on alg complete" : "manual start";
+  elements.configsStatus.textContent = `Configs loaded: ${backMovesLabel}, ${autoStartLabel}.`;
+}
+
 function renderWorkflow() {
   switch (workflowPhase) {
     case WORKFLOW_PHASE.IDLE:
@@ -806,6 +848,7 @@ function renderWorkflow() {
 
 function switchScreen(screen) {
   activeScreen =
+    screen === "configs" ||
     screen === "pairing" ||
     screen === "records" ||
     screen === "debug" ||
@@ -814,18 +857,21 @@ function switchScreen(screen) {
       ? screen
       : "solve";
 
+  const configsActive = activeScreen === "configs";
   const pairingActive = activeScreen === "pairing";
   const solveActive = activeScreen === "solve";
   const recordsActive = activeScreen === "records";
   const calibrationActive = activeScreen === "calibration";
   const debugActive = activeScreen === "debug";
   const updatesActive = activeScreen === "updates";
+  elements.configsScreen.classList.toggle("active", configsActive);
   elements.pairingScreen.classList.toggle("active", pairingActive);
   elements.solveScreen.classList.toggle("active", solveActive);
   elements.recordsScreen.classList.toggle("active", recordsActive);
   elements.calibrationScreen.classList.toggle("active", calibrationActive);
   elements.debugScreen.classList.toggle("active", debugActive);
   elements.updatesScreen.classList.toggle("active", updatesActive);
+  elements.navConfigsBtn.classList.toggle("active", configsActive);
   elements.navPairingBtn.classList.toggle("active", pairingActive);
   elements.navSolveBtn.classList.toggle("active", solveActive);
   elements.navRecordsBtn.classList.toggle("active", recordsActive);
@@ -2179,8 +2225,9 @@ function isFaceletsSolved(facelets) {
   return true;
 }
 
-function generateScramble(length) {
-  const faces = ["U", "R", "F", "D", "L", "B"];
+function generateScramble(length, options = {}) {
+  const { excludeBackMoves = false } = options;
+  const faces = excludeBackMoves ? ["U", "R", "F", "D", "L"] : ["U", "R", "F", "D", "L", "B"];
   const suffixes = ["", "'", "2"];
   const axisMap = {
     U: "UD",
@@ -2623,6 +2670,22 @@ function updateAutoConnectPreference(enabled) {
 
 function loadAutoConnectPreference() {
   return window.localStorage.getItem(AUTO_CONNECT_LAST_CUBE_KEY) !== "0";
+}
+
+function persistScrambleExcludeBackPreference(enabled) {
+  window.localStorage.setItem(SCRAMBLE_EXCLUDE_BACK_KEY, enabled ? "1" : "0");
+}
+
+function loadScrambleExcludeBackPreference() {
+  return window.localStorage.getItem(SCRAMBLE_EXCLUDE_BACK_KEY) === "1";
+}
+
+function persistAutoStartInspectionAfterAlgPreference(enabled) {
+  window.localStorage.setItem(AUTO_START_INSPECTION_AFTER_ALG_KEY, enabled ? "1" : "0");
+}
+
+function loadAutoStartInspectionAfterAlgPreference() {
+  return window.localStorage.getItem(AUTO_START_INSPECTION_AFTER_ALG_KEY) === "1";
 }
 
 function persistOrientationSyncPreference(enabled) {
