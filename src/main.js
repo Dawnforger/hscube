@@ -2,6 +2,7 @@ import { connectGanCube } from "gan-web-bluetooth";
 import { createCubeRenderer } from "./cubeRenderer";
 import {
   clearNativePreferredDevice,
+  getLastResolvedNativeDeviceId,
   installNativeBluetoothShimIfNeeded,
   setNativePreferredDevice,
 } from "./nativeBluetooth";
@@ -17,6 +18,7 @@ const ORIENTATION_CALIBRATION_KEY = "hs-cube-orientation-calibration-v1";
 const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.0.0";
 const RELEASES_API_URL = "https://api.github.com/repos/Dawnforger/hscube/releases?per_page=20";
 const FACELET_POLL_THROTTLE_MS = 180;
+const AUTO_CONNECT_RETRY_MS = 12000;
 const SCRAMBLE_LENGTH = 20;
 const MAX_INSPECTION_SECONDS = 30;
 const CALIBRATION_FACE_SEQUENCE = ["U", "R", "F", "D", "L", "B"];
@@ -157,8 +159,8 @@ let currentCubeSolved = true;
 let currentFacelets = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
 let cubeRenderer = null;
 let activeScreen = "solve";
-let autoConnectAttempted = false;
 let autoConnectInProgress = false;
+let autoConnectRetryHandle = null;
 let suppressDisconnectRemembering = false;
 let orientationSyncEnabled = false;
 let orientationSupportedByCube = null;
@@ -196,7 +198,7 @@ const knownCubes = loadKnownCubes();
 
 elements.connectBtn.addEventListener("click", onConnectClick);
 elements.disconnectBtn.addEventListener("click", () => {
-  void disconnectCube();
+  void disconnectCube({ suppressAutoReconnect: true });
 });
 elements.menuToggleBtn.addEventListener("click", toggleDrawer);
 elements.drawerBackdrop.addEventListener("click", closeDrawer);
@@ -323,8 +325,8 @@ window.addEventListener("beforeunload", () => {
 });
 
 async function onConnectClick() {
-  autoConnectAttempted = true;
   suppressDisconnectRemembering = false;
+  clearAutoConnectRetry();
   clearNativePreferredDevice();
   setBluetoothStatus(
     nativeBluetoothActive
@@ -357,12 +359,14 @@ async function connectToCube(options = {}) {
   try {
     if (nativeBluetoothActive && usePreferredDevice) {
       const lastCube = getLastCube();
-      if (lastCube?.id) {
-        setNativePreferredDevice(lastCube.id, { suppressPickerOnFailure });
+      const preferredNativeId = lastCube?.nativeDeviceId || lastCube?.id;
+      if (preferredNativeId) {
+        setNativePreferredDevice(preferredNativeId, { suppressPickerOnFailure });
       }
     }
     const connection = await connectGanCube(makeMacAddressProvider());
     cubeConnection = connection;
+    clearAutoConnectRetry();
     cubeEventsSubscription = connection.events$.subscribe((event) => {
       void onGanCubeEvent(event);
     });
@@ -414,7 +418,7 @@ async function connectToCube(options = {}) {
 }
 
 async function disconnectCube(options = {}) {
-  const { preserveStatus = false, forgetPreferred = false } = options;
+  const { preserveStatus = false, forgetPreferred = false, suppressAutoReconnect = false } = options;
 
   stopInspection({ resetDisplay: true });
   if (timerRunning) {
@@ -459,6 +463,15 @@ async function disconnectCube(options = {}) {
   }
   setCubeSyncStatus("Cube disconnected.");
   renderWorkflow();
+  if (
+    nativeBluetoothActive &&
+    elements.autoConnectCheckbox.checked &&
+    !suppressAutoReconnect &&
+    !forgetPreferred &&
+    !cubeConnection
+  ) {
+    scheduleAutoConnectRetry(1600);
+  }
 }
 
 async function onGanCubeEvent(event) {
@@ -890,7 +903,7 @@ function onAutoConnectToggle() {
     const lastCube = getLastCube();
     if (lastCube?.id) {
       setBluetoothStatus(`Auto-connect enabled for ${lastCube.name}.`);
-      if (nativeBluetoothActive && !cubeConnection && !autoConnectInProgress) {
+      if (nativeBluetoothActive && !cubeConnection) {
         void maybeAutoConnectLastCube();
       }
       return;
@@ -899,6 +912,7 @@ function onAutoConnectToggle() {
     return;
   }
 
+  clearAutoConnectRetry();
   setBluetoothStatus("Auto-connect disabled.");
 }
 
@@ -3079,6 +3093,8 @@ function rememberConnectedCube(connection) {
   if (!name || !id) {
     return;
   }
+  const nativeDeviceId =
+    extractNativeDeviceId(connection) ?? getLastResolvedNativeDeviceId() ?? null;
 
   const now = new Date().toISOString();
   const existing = knownCubes.findIndex((cube) => cube.id === id);
@@ -3086,12 +3102,14 @@ function rememberConnectedCube(connection) {
     knownCubes[existing] = {
       ...knownCubes[existing],
       name,
+      nativeDeviceId: nativeDeviceId ?? knownCubes[existing].nativeDeviceId ?? null,
       lastSeenAt: now,
     };
   } else {
     knownCubes.push({
       id,
       name,
+      nativeDeviceId,
       lastSeenAt: now,
     });
   }
@@ -3099,9 +3117,30 @@ function rememberConnectedCube(connection) {
   saveLastCube({
     id,
     name,
+    nativeDeviceId,
     lastSeenAt: now,
   });
   renderRememberedCubesStatus();
+}
+
+function extractNativeDeviceId(connection) {
+  const candidates = [
+    connection?.device?.id,
+    connection?.deviceId,
+    connection?.nativeDeviceId,
+    connection?.bluetoothDeviceId,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const trimmed = candidate.trim();
+    if (!trimmed) {
+      continue;
+    }
+    return trimmed;
+  }
+  return null;
 }
 
 function getLastCube() {
@@ -3117,6 +3156,10 @@ function getLastCube() {
     return {
       id: parsed.id.trim().toUpperCase(),
       name: typeof parsed.name === "string" ? parsed.name : "Last cube",
+      nativeDeviceId:
+        typeof parsed.nativeDeviceId === "string" && parsed.nativeDeviceId.trim()
+          ? parsed.nativeDeviceId.trim()
+          : null,
       lastSeenAt:
         typeof parsed.lastSeenAt === "string"
           ? parsed.lastSeenAt
@@ -3140,10 +3183,13 @@ function forgetKnownCubes() {
 }
 
 async function maybeAutoConnectLastCube() {
-  if (autoConnectAttempted || autoConnectInProgress) {
+  if (autoConnectInProgress) {
     return;
   }
   if (!nativeBluetoothActive) {
+    return;
+  }
+  if (!elements.autoConnectCheckbox.checked || cubeConnection) {
     return;
   }
   const lastCube = getLastCube();
@@ -3151,7 +3197,7 @@ async function maybeAutoConnectLastCube() {
     return;
   }
 
-  autoConnectAttempted = true;
+  clearAutoConnectRetry();
   autoConnectInProgress = true;
   try {
     await connectToCube({
@@ -3161,7 +3207,29 @@ async function maybeAutoConnectLastCube() {
     });
   } finally {
     autoConnectInProgress = false;
+    if (!cubeConnection && elements.autoConnectCheckbox.checked) {
+      scheduleAutoConnectRetry(AUTO_CONNECT_RETRY_MS);
+    }
   }
+}
+
+function clearAutoConnectRetry() {
+  if (!autoConnectRetryHandle) {
+    return;
+  }
+  window.clearTimeout(autoConnectRetryHandle);
+  autoConnectRetryHandle = null;
+}
+
+function scheduleAutoConnectRetry(delayMs = AUTO_CONNECT_RETRY_MS) {
+  clearAutoConnectRetry();
+  if (!nativeBluetoothActive || !elements.autoConnectCheckbox.checked || cubeConnection) {
+    return;
+  }
+  autoConnectRetryHandle = window.setTimeout(() => {
+    autoConnectRetryHandle = null;
+    void maybeAutoConnectLastCube();
+  }, Math.max(1000, Math.round(delayMs)));
 }
 
 function isNativeRuntime() {
@@ -3194,6 +3262,10 @@ function loadKnownCubes() {
           typeof entry?.name === "string" && entry.name.trim().length > 0
             ? entry.name.trim()
             : "GAN Cube",
+        nativeDeviceId:
+          typeof entry?.nativeDeviceId === "string" && entry.nativeDeviceId.trim()
+            ? entry.nativeDeviceId.trim()
+            : null,
         lastSeenAt:
           typeof entry?.lastSeenAt === "string"
             ? entry.lastSeenAt
