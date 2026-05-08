@@ -4,7 +4,10 @@ import { BleClient } from "@capacitor-community/bluetooth-le";
 let bleInitialized = false;
 let preferredNativeDeviceId = null;
 let preferredDevicePickerSuppressed = false;
+let preferredNativeDeviceName = null;
+let preferredCubeMac = null;
 let lastResolvedNativeDeviceId = null;
+const AUTO_CONNECT_SCAN_TIMEOUT_MS = 4500;
 const GAN_GEN2_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dc4179";
 const GAN_GEN3_SERVICE_UUID = "8653000a-43e6-47b7-9cb0-5fc21d4ae340";
 const GAN_GEN4_SERVICE_UUID = "00000010-0000-fff7-fff6-fff5fff4fff0";
@@ -12,6 +15,14 @@ const GAN_GEN4_SERVICE_UUID = "00000010-0000-fff7-fff6-fff5fff4fff0";
 export function setNativePreferredDevice(deviceId, options = {}) {
   preferredNativeDeviceId = typeof deviceId === "string" && deviceId ? deviceId : null;
   preferredDevicePickerSuppressed = Boolean(options?.suppressPickerOnFailure);
+  preferredNativeDeviceName =
+    typeof options?.deviceName === "string" && options.deviceName.trim()
+      ? options.deviceName.trim()
+      : null;
+  preferredCubeMac =
+    typeof options?.deviceMac === "string" && options.deviceMac.trim()
+      ? options.deviceMac.trim()
+      : null;
 }
 
 export function getLastResolvedNativeDeviceId() {
@@ -21,6 +32,8 @@ export function getLastResolvedNativeDeviceId() {
 export function clearNativePreferredDevice() {
   preferredNativeDeviceId = null;
   preferredDevicePickerSuppressed = false;
+  preferredNativeDeviceName = null;
+  preferredCubeMac = null;
 }
 
 export async function installNativeBluetoothShimIfNeeded() {
@@ -62,12 +75,7 @@ async function requestDevice(options = {}) {
   await ensureBleInitialized();
 
   if (preferredNativeDeviceId) {
-    const preferredCandidates = buildPreferredDeviceIdCandidates(preferredNativeDeviceId);
-    const maybeKnown = await BleClient.getDevices({
-      deviceIds: preferredCandidates,
-    }).catch(() => ({ devices: [] }));
-    const knownDevice =
-      maybeKnown?.devices?.find((device) => Boolean(device?.deviceId)) ?? null;
+    const knownDevice = await resolvePreferredNativeDevice().catch(() => null);
     if (knownDevice?.deviceId) {
       preferredNativeDeviceId = knownDevice.deviceId;
       lastResolvedNativeDeviceId = knownDevice.deviceId;
@@ -114,6 +122,219 @@ async function requestDevice(options = {}) {
   lastResolvedNativeDeviceId = bleDevice.deviceId;
   preferredDevicePickerSuppressed = false;
   return new NativeBluetoothDevice(bleDevice.deviceId, bleDevice.name ?? "Unknown cube");
+}
+
+async function resolvePreferredNativeDevice() {
+  const preferredCandidates = buildPreferredDeviceIdCandidates(preferredNativeDeviceId);
+  const nameHint = normalizeName(preferredNativeDeviceName);
+  const macHint = normalizeMac(preferredCubeMac);
+
+  const connectedDevices = await BleClient.getConnectedDevices([]).catch(() => ({ devices: [] }));
+  const connectedMatch = findBestPreferredDevice(connectedDevices?.devices ?? [], {
+    preferredCandidates,
+    nameHint,
+    macHint,
+  });
+  if (connectedMatch) {
+    return connectedMatch;
+  }
+
+  const bondedDevices = await BleClient.getBondedDevices().catch(() => ({ devices: [] }));
+  const bondedList = bondedDevices?.devices ?? [];
+  const bondedMatch = findBestPreferredDevice(bondedList, {
+    preferredCandidates,
+    nameHint,
+    macHint,
+  });
+  if (bondedMatch) {
+    return bondedMatch;
+  }
+
+  const scannedMatch = await discoverPreferredDeviceViaScan({
+    preferredCandidates,
+    nameHint,
+    macHint,
+    timeoutMs: AUTO_CONNECT_SCAN_TIMEOUT_MS,
+  }).catch(() => null);
+  if (scannedMatch) {
+    return scannedMatch;
+  }
+
+  const fallbackKnown = await BleClient.getDevices({
+    deviceIds: preferredCandidates,
+  }).catch(() => ({ devices: [] }));
+  const fallbackMatch = findBestPreferredDevice(fallbackKnown?.devices ?? [], {
+    preferredCandidates,
+    nameHint,
+    macHint,
+    allowIdOnlyMatch: true,
+  });
+  return fallbackMatch;
+}
+
+async function discoverPreferredDeviceViaScan(options = {}) {
+  const { preferredCandidates = [], nameHint = null, macHint = null, timeoutMs = 4000 } = options;
+  const deadlineMs = Math.max(1800, Math.round(timeoutMs));
+  const start = Date.now();
+  let best = null;
+  let scanError = null;
+
+  try {
+    await BleClient.requestLEScan(
+      {
+        namePrefix: "GAN",
+        optionalServices: [GAN_GEN2_SERVICE_UUID, GAN_GEN3_SERVICE_UUID, GAN_GEN4_SERVICE_UUID],
+      },
+      (scanResult) => {
+        const candidate = extractBleDeviceFromScanResult(scanResult);
+        if (!candidate) {
+          return;
+        }
+        if (!isCandidateRelevant(candidate, preferredCandidates, nameHint, macHint)) {
+          return;
+        }
+        best = candidate;
+      },
+    );
+  } catch (error) {
+    scanError = error;
+  }
+
+  while (!best && Date.now() - start < deadlineMs) {
+    await delay(200);
+  }
+
+  await BleClient.stopLEScan().catch(() => undefined);
+  if (best) {
+    return best;
+  }
+  if (scanError) {
+    throw scanError;
+  }
+  return null;
+}
+
+function extractBleDeviceFromScanResult(scanResult) {
+  if (!scanResult || typeof scanResult !== "object") {
+    return null;
+  }
+  if (scanResult.device && typeof scanResult.device === "object") {
+    return scanResult.device;
+  }
+  if (scanResult.deviceId) {
+    return {
+      deviceId: scanResult.deviceId,
+      name: typeof scanResult.localName === "string" ? scanResult.localName : undefined,
+    };
+  }
+  return null;
+}
+
+function findBestPreferredDevice(devices, options = {}) {
+  const {
+    preferredCandidates = [],
+    nameHint = null,
+    macHint = null,
+    allowIdOnlyMatch = false,
+  } = options;
+  const list = Array.isArray(devices) ? devices.filter((entry) => Boolean(entry?.deviceId)) : [];
+  if (!list.length) {
+    return null;
+  }
+
+  const exactIdMatch = list.find((entry) => matchesPreferredId(entry.deviceId, preferredCandidates));
+  if (exactIdMatch) {
+    return exactIdMatch;
+  }
+
+  if (macHint) {
+    const macMatch = list.find((entry) => normalizeMac(entry.deviceId) === macHint);
+    if (macMatch) {
+      return macMatch;
+    }
+  }
+
+  if (nameHint) {
+    const nameMatch = list.find((entry) => normalizeName(entry.name) === nameHint);
+    if (nameMatch) {
+      return nameMatch;
+    }
+  }
+
+  const singleGanCandidate = list.filter((entry) => isGanLikeName(entry.name));
+  if (singleGanCandidate.length === 1 && (nameHint || macHint)) {
+    return singleGanCandidate[0];
+  }
+
+  if (allowIdOnlyMatch) {
+    return list[0];
+  }
+
+  return null;
+}
+
+function isCandidateRelevant(candidate, preferredCandidates, nameHint, macHint) {
+  if (!candidate?.deviceId) {
+    return false;
+  }
+  if (matchesPreferredId(candidate.deviceId, preferredCandidates)) {
+    return true;
+  }
+  if (macHint && normalizeMac(candidate.deviceId) === macHint) {
+    return true;
+  }
+  if (nameHint && normalizeName(candidate.name) === nameHint) {
+    return true;
+  }
+  return false;
+}
+
+function matchesPreferredId(deviceId, preferredCandidates = []) {
+  const normalizedDeviceId = normalizeId(deviceId);
+  if (!normalizedDeviceId) {
+    return false;
+  }
+  return preferredCandidates.some((candidate) => normalizeId(candidate) === normalizedDeviceId);
+}
+
+function normalizeId(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value.trim().toLowerCase();
+}
+
+function normalizeName(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const next = value.trim().toLowerCase();
+  return next || null;
+}
+
+function normalizeMac(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const compact = value.trim().replace(/[^a-fA-F0-9]/g, "").toUpperCase();
+  if (compact.length !== 12) {
+    return null;
+  }
+  return compact;
+}
+
+function isGanLikeName(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const name = value.trim().toUpperCase();
+  return name.startsWith("GAN") || name.startsWith("MG") || name.startsWith("AICUBE");
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function buildPreferredDeviceIdCandidates(deviceId) {

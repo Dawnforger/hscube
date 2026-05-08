@@ -361,7 +361,11 @@ async function connectToCube(options = {}) {
       const lastCube = getLastCube();
       const preferredNativeId = lastCube?.nativeDeviceId || lastCube?.id;
       if (preferredNativeId) {
-        setNativePreferredDevice(preferredNativeId, { suppressPickerOnFailure });
+        setNativePreferredDevice(preferredNativeId, {
+          suppressPickerOnFailure,
+          deviceName: lastCube?.name,
+          deviceMac: lastCube?.id,
+        });
       }
     }
     const connection = await connectGanCube(makeMacAddressProvider());
@@ -393,7 +397,9 @@ async function connectToCube(options = {}) {
     }
     const message = error instanceof Error ? error.message : String(error);
     const normalized = message.toLowerCase();
-    if (
+    if (usePreferredDevice && normalized.includes("preferred device unavailable")) {
+      setBluetoothStatus("Auto-connect: waiting for remembered cube to become available...");
+    } else if (
       normalized.includes("can't find target ble services") ||
       normalized.includes("characteristic not found")
     ) {
