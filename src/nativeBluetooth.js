@@ -4,6 +4,7 @@ import { BleClient } from "@capacitor-community/bluetooth-le";
 let bleInitialized = false;
 let preferredNativeDeviceId = null;
 let preferredDevicePickerSuppressed = false;
+let lastResolvedNativeDeviceId = null;
 const GAN_GEN2_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dc4179";
 const GAN_GEN3_SERVICE_UUID = "8653000a-43e6-47b7-9cb0-5fc21d4ae340";
 const GAN_GEN4_SERVICE_UUID = "00000010-0000-fff7-fff6-fff5fff4fff0";
@@ -11,6 +12,10 @@ const GAN_GEN4_SERVICE_UUID = "00000010-0000-fff7-fff6-fff5fff4fff0";
 export function setNativePreferredDevice(deviceId, options = {}) {
   preferredNativeDeviceId = typeof deviceId === "string" && deviceId ? deviceId : null;
   preferredDevicePickerSuppressed = Boolean(options?.suppressPickerOnFailure);
+}
+
+export function getLastResolvedNativeDeviceId() {
+  return lastResolvedNativeDeviceId;
 }
 
 export function clearNativePreferredDevice() {
@@ -57,11 +62,15 @@ async function requestDevice(options = {}) {
   await ensureBleInitialized();
 
   if (preferredNativeDeviceId) {
+    const preferredCandidates = buildPreferredDeviceIdCandidates(preferredNativeDeviceId);
     const maybeKnown = await BleClient.getDevices({
-      deviceIds: [preferredNativeDeviceId],
+      deviceIds: preferredCandidates,
     }).catch(() => ({ devices: [] }));
-    const knownDevice = maybeKnown?.devices?.[0];
+    const knownDevice =
+      maybeKnown?.devices?.find((device) => Boolean(device?.deviceId)) ?? null;
     if (knownDevice?.deviceId) {
+      preferredNativeDeviceId = knownDevice.deviceId;
+      lastResolvedNativeDeviceId = knownDevice.deviceId;
       preferredDevicePickerSuppressed = false;
       return new NativeBluetoothDevice(
         knownDevice.deviceId,
@@ -102,8 +111,27 @@ async function requestDevice(options = {}) {
   }
 
   preferredNativeDeviceId = bleDevice.deviceId;
+  lastResolvedNativeDeviceId = bleDevice.deviceId;
   preferredDevicePickerSuppressed = false;
   return new NativeBluetoothDevice(bleDevice.deviceId, bleDevice.name ?? "Unknown cube");
+}
+
+function buildPreferredDeviceIdCandidates(deviceId) {
+  const raw = String(deviceId ?? "").trim();
+  if (!raw) {
+    return [];
+  }
+  const candidates = [raw, raw.toUpperCase(), raw.toLowerCase()];
+  if (isLikelyMacAddress(raw)) {
+    const normalized = raw.replace(/-/g, ":").toUpperCase();
+    const compact = normalized.replace(/:/g, "");
+    candidates.push(normalized, compact, compact.toLowerCase());
+  }
+  return unique(candidates);
+}
+
+function isLikelyMacAddress(value) {
+  return /^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i.test(String(value ?? "").trim());
 }
 
 function toBleRequestOptions(options) {
