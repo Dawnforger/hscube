@@ -1,0 +1,5 @@
+{
+  "name": "hs-cube-android-release-env",
+  "install": "bash scripts/setup-cloud-agent-android.sh",
+  "start": "echo Android cloud agent environment ready"
+}

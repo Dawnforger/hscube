@@ -10,6 +10,7 @@ pick_java_home() {
     return
   fi
   for candidate in \
+    /usr/lib/jvm/java-21-openjdk-amd64 \
     /usr/lib/jvm/java-21-openjdk \
     /usr/lib/jvm/java-21 \
     /usr/lib/jvm/java-17-openjdk \

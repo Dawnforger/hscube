@@ -47,6 +47,21 @@ npm install
 npm run setup:android
 ```
 
+### Cursor Cloud Agent environment
+
+This repo includes `.cursor/environment.json` so cloud agents can auto-provision Android build dependencies on startup using:
+
+```bash
+bash scripts/setup-cloud-agent-android.sh
+```
+
+It installs/configures:
+
+- `openjdk-21-jdk` with `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64`
+- Android SDK cmdline tools under `/home/ubuntu/Android/Sdk`
+- `platform-tools`, `platforms;android-36`, `build-tools;36.0.0`
+- `ANDROID_HOME` and `ANDROID_SDK_ROOT` set to `/home/ubuntu/Android/Sdk`
+
 Point Gradle at your SDK. The `apk:debug` script searches common install locations (including **Flatpak** and **Snap** Android Studio) and can **create** `android/local.properties` for you when it finds one.
 
 If it still fails, set the path explicitly:
